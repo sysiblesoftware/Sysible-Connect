@@ -128,6 +128,31 @@ def delete_host(name: str, user: str = Depends(current_user)):
     return {"deleted": hosts.delete_host(name)}
 
 
+@app.post("/api/hosts/ping")
+def ping_hosts(user: str = Depends(current_user)):
+    """Reachability probe for every host: a short TCP connect to its SSH port. A
+    Controller-synced host with no address (a NAT'd agent) can't be dialed directly —
+    it's reported as reachable-via-Controller rather than down."""
+    import socket
+    from concurrent.futures import ThreadPoolExecutor
+
+    def probe(h):
+        addr, port = h.get("address", ""), int(h.get("port") or 22)
+        if not addr:
+            return {"name": h["name"], "reachable": None, "detail": "via Controller"}
+        t0 = time.time()
+        try:
+            with socket.create_connection((addr, port), timeout=3):
+                return {"name": h["name"], "reachable": True, "ms": int((time.time() - t0) * 1000)}
+        except OSError as e:
+            return {"name": h["name"], "reachable": False, "detail": str(e)[:80]}
+
+    hs = hosts.list_hosts()
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        results = list(ex.map(probe, hs)) if hs else []
+    return {"results": results}
+
+
 # ------------------------------------------------------------------ controller
 @app.get("/api/controller")
 def controller_status(user: str = Depends(current_user)):

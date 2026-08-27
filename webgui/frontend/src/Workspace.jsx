@@ -19,6 +19,8 @@ export default function Workspace({ me, onLogout }) {
   const [ctrl, setCtrl] = useState({ connected: false })
   const [ctrlForm, setCtrlForm] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [ping, setPing] = useState({})        // host name -> {reachable, ms, detail}
+  const [pinging, setPinging] = useState(false)
   const stageRef = useRef(null)
   const dragRef = useRef(null)   // { spaceIdx, splitId, dir }
 
@@ -97,7 +99,24 @@ export default function Workspace({ me, onLogout }) {
     if (!confirm(`Remove host “${name}”?`)) return
     try { await api(`hosts/${encodeURIComponent(name)}`, { method: 'DELETE' }); loadHosts() } catch (e) { alert(e.message) }
   }
+  const pingAll = async () => {
+    setPinging(true)
+    try { const d = await api('hosts/ping', { method: 'POST' }); setPing(Object.fromEntries((d.results || []).map((r) => [r.name, r]))) }
+    catch (e) { alert(e.message) } finally { setPinging(false) }
+  }
   const logout = async () => { try { await api('logout', { method: 'POST' }) } catch { /* */ } onLogout() }
+
+  // Group hosts by environment for the sidebar (Unassigned last).
+  const hostGroups = React.useMemo(() => {
+    const m = {}
+    for (const h of hosts) (m[h.environment || 'Unassigned'] ||= []).push(h)
+    return Object.entries(m).sort((a, b) => (a[0] === 'Unassigned') - (b[0] === 'Unassigned') || a[0].localeCompare(b[0]))
+  }, [hosts])
+  const dotClass = (h) => {
+    const p = ping[h.name]
+    if (p) { if (p.reachable === true) return ' up'; if (p.reachable === false) return ' down' }
+    return h.source === 'controller' ? ' ctrl' : ''
+  }
 
   return (
     <div className="connect-shell">
@@ -120,25 +139,37 @@ export default function Workspace({ me, onLogout }) {
           : <div className="side-empty">Not connected.</div>}
         {ctrlForm && <ConnectController onCancel={() => setCtrlForm(false)} onSave={connectController} />}
 
-        <div className="side-sec">SSH hosts <button className="side-add" title="Add host" onClick={() => setAdding(true)}>＋</button></div>
+        <div className="side-sec">Hosts
+          <span style={{ display: 'flex', gap: 4 }}>
+            <button className="side-add" title="Ping all hosts (TCP reach)" disabled={pinging || !hosts.length} onClick={pingAll}>{pinging ? '…' : '◎'}</button>
+            <button className="side-add" title="Add host" onClick={() => setAdding(true)}>＋</button>
+          </span>
+        </div>
         {hosts.length === 0 && <div className="side-empty">No hosts yet.</div>}
-        {hosts.map((h) => {
-          const viaCtrl = h.source === 'controller'
-          const kind = viaCtrl ? 'controller' : 'ssh'
-          const tip = viaCtrl
-            ? `via Controller (${h.transport || 'agent'}${h.environment ? ' · ' + h.environment : ''})`
-            : `SSH ${h.user}@${h.address}:${h.port}`
-          return (
-            <div key={h.name} className="side-host">
-              <button className="side-host-open" title={tip}
-                onClick={() => openTerminal({ kind, host: h.name, title: h.name })}>
-                <span className={'dot' + (viaCtrl ? ' ctrl' : '')} /> {h.name}
-                {viaCtrl && <span className="host-badge">{h.transport === 'ssh' ? 'ssh' : 'agent'}</span>}
-              </button>
-              <button className="side-host-del" title="Remove" onClick={() => delHost(h.name)}>✕</button>
-            </div>
-          )
-        })}
+        {hostGroups.map(([env, list]) => (
+          <div key={env}>
+            {hostGroups.length > 1 && <div className="side-envgroup">{env}</div>}
+            {list.map((h) => {
+              const viaCtrl = h.source === 'controller'
+              const kind = viaCtrl ? 'controller' : 'ssh'
+              const p = ping[h.name]
+              const tip = (viaCtrl
+                ? `via Controller (${h.transport || 'agent'}${h.environment ? ' · ' + h.environment : ''})`
+                : `SSH ${h.user}@${h.address}:${h.port}`)
+                + (p ? ` — ${p.reachable === true ? p.ms + 'ms' : p.reachable === false ? 'unreachable' : p.detail || ''}` : '')
+              return (
+                <div key={h.name} className="side-host">
+                  <button className="side-host-open" title={tip}
+                    onClick={() => openTerminal({ kind, host: h.name, title: h.name })}>
+                    <span className={'dot' + dotClass(h)} /> {h.name}
+                    {viaCtrl && <span className="host-badge">{h.transport === 'ssh' ? 'ssh' : 'agent'}</span>}
+                  </button>
+                  <button className="side-host-del" title="Remove" onClick={() => delHost(h.name)}>✕</button>
+                </div>
+              )
+            })}
+          </div>
+        ))}
         {adding && <AddHost onCancel={() => setAdding(false)} onSave={addHost} />}
 
         <div className="side-foot">
