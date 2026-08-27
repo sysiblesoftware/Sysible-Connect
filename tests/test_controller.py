@@ -118,3 +118,14 @@ def test_connect_refuses_loopback(auth_client):
     # any request is made.
     r = auth_client.post("/api/controller", json={"base_url": "https://127.0.0.1:9000", "api_key": "K"})
     assert r.status_code == 400 and "loopback" in r.json()["detail"].lower()
+
+
+def test_controller_key_encrypted_at_rest(auth_client, monkeypatch):
+    # The machine API key must not sit in plaintext on disk (F2).
+    monkeypatch.setattr(controller.requests, "request",
+                        _fake_api({("GET", "/remote/hosts"): _Resp(200, {})}))
+    auth_client.post("/api/controller", json={"base_url": "https://ctrl:9000", "api_key": "SECRET-KEY-123"})
+    raw = controller._CFG.read_text()
+    assert "SECRET-KEY-123" not in raw          # not plaintext
+    assert "api_key_enc" in raw                  # stored encrypted
+    assert controller._load()["api_key"] == "SECRET-KEY-123"   # round-trips in memory

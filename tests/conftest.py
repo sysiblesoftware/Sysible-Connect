@@ -28,6 +28,7 @@ def _isolate():
         hosts._save({})
     import backend.controller as controller
     controller.disconnect()
+    app_module._LOGIN_FAIL.clear()
     auth.ensure_admin()
     yield
 

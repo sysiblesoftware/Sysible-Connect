@@ -28,6 +28,7 @@ import requests
 
 from .auth import DATA_DIR
 from . import hosts as host_store
+from . import secret
 
 _CFG = DATA_DIR / "controller.json"
 _CA = DATA_DIR / "controller_ca.pem"
@@ -41,16 +42,26 @@ class ControllerError(Exception):
 def _load() -> dict:
     try:
         d = json.loads(_CFG.read_text())
-        return d if isinstance(d, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
+    if not isinstance(d, dict):
+        return {}
+    # API key is stored encrypted (api_key_enc); decrypt into memory. A legacy
+    # plaintext api_key is tolerated and re-encrypted on the next save.
+    if d.get("api_key_enc"):
+        d["api_key"] = secret.decrypt(d.pop("api_key_enc"))
+    return d
 
 
 def _save(cfg: dict) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    out = dict(cfg)
+    if out.get("api_key"):
+        out["api_key_enc"] = secret.encrypt(out.pop("api_key"))
+    out.pop("api_key", None)          # never write the key in plaintext
     fd = os.open(str(_CFG), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.write(fd, json.dumps(cfg).encode())
+        os.write(fd, json.dumps(out).encode())
     finally:
         os.close(fd)
 

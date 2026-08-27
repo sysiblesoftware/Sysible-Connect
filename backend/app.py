@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -40,12 +41,38 @@ def _is_https(request: Request) -> bool:
     return xfp == "https"
 
 
+# In-memory brute-force throttle for the password login (per client IP + username).
+# Connect is the one password login reachable without already holding a session, so
+# it gets a lockout after a burst of failures. Process-local (no DB) — fine for a
+# single-node console.
+_LOGIN_FAIL: dict = {}
+_LOGIN_MAX = 5              # failures before a lockout
+_LOGIN_LOCK_S = 300        # lockout duration
+
+
+def _throttle_key(request: Request, user: str) -> str:
+    ip = request.client.host if request.client else "?"
+    return f"{ip}:{user.lower()}"
+
+
 @app.post("/api/login")
 def login(request: Request, response: Response, body: dict = Body(...)):
     user = str(body.get("username") or "").strip()
     pw = str(body.get("password") or "")
+    key = _throttle_key(request, user)
+    now = time.time()
+    st = _LOGIN_FAIL.get(key)
+    if st and st.get("until", 0) > now:
+        raise HTTPException(status_code=429,
+                            detail="Too many failed attempts — try again in a few minutes.")
     if not auth.verify(user, pw):
+        st = _LOGIN_FAIL.setdefault(key, {"n": 0, "until": 0})
+        st["n"] += 1
+        if st["n"] >= _LOGIN_MAX:
+            st["until"] = now + _LOGIN_LOCK_S
+            st["n"] = 0
         raise HTTPException(status_code=401, detail="Invalid username or password.")
+    _LOGIN_FAIL.pop(key, None)   # clear on success
     token = auth.new_session(user)
     # Secure when served over TLS (the default) so the session cookie never rides
     # plain HTTP; omitted on a plain-HTTP dev/proxy setup so login still works there.

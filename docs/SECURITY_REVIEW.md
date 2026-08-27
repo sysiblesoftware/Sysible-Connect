@@ -59,13 +59,12 @@ unscoped machine key, a single Connect admin ≈ Controller superuser for termin
   owner-binding and audit trail attribute the session to a person, not just "the
   Connect key". (Requires a Controller-side accepted identity header bound to the key.)
 
-### F2 — Controller API key stored in plaintext at rest (Connect) · **Medium**
-Connect writes the key to `~/.sysible-connect/controller.json` mode `0600`. That
-stops other local users, but it's plaintext on disk (backups, snapshots, an
-attacker with that uid). SLEP encrypts the stored controller key; Connect should
-match, or document that the data dir must be treated as a secret store.
-- **Mitigation**: encrypt at rest with a key derived from a machine secret, or
-  keep it only in memory / a secrets manager. At minimum, document it.
+### F2 — Controller API key stored in plaintext at rest (Connect) · **Medium** · **(fixed)**
+The key was written to `~/.sysible-connect/controller.json` mode `0600` — plaintext
+on disk (backups, snapshots, an attacker with that uid). Now the key is **encrypted
+at rest** (`backend/secret.py`, Fernet) under a per-install `secret.key` (0600); the
+config stores `api_key_enc` and the plaintext key exists only in memory. A legacy
+plaintext key is tolerated and re-encrypted on next save.
 
 ### F3 — Session cookie missing `Secure` under HTTPS · **Medium** · **(fixed)**
 The Connect session cookie was `HttpOnly; SameSite=Lax` but not `Secure`, so on a
@@ -94,18 +93,21 @@ itself. Acceptable for a LAN control plane and strictly better than blanket
 Reachable on every interface. Now HTTPS, but still: firewall the console port to
 the admin network, or bind a specific NIC (`HOST=…`). Documented in `run.sh`.
 
-### F8 — No rate limiting on Connect login · **Low**
-The Controller portal throttles password logins; Connect's `/api/login` does not.
-Add a simple per-IP/username backoff to blunt online password guessing.
+### F8 — No rate limiting on Connect login · **Low** · **(fixed)**
+Connect's `/api/login` now throttles per client-IP + username: 5 failures triggers a
+5-minute lockout (the correct password is refused during it too), cleared on a
+successful login. Process-local, sufficient for a single-node console.
 
-## 4. Recommended order
+## 4. Status
 
-1. **F1** — scope the machine key Connect uses (biggest blast-radius reduction).
-2. **F2** — encrypt the stored key, or formally treat the data dir as secret.
-3. **F8** — login throttle on Connect.
-4. Revisit **F6** for any install that leaves the LAN.
+Addressed: **F2** (key encrypted at rest), **F3** (Secure cookie), **F4** (no
+default admin/admin), **F5** (SSRF guard), **F8** (login throttle).
 
-F3/F4/F5 are addressed in this change; the rest are tracked here.
+Remaining:
+1. **F1** — scope the machine key Connect uses (biggest blast-radius reduction; a
+   Controller-side capability + a forwarded operator identity). The top follow-up.
+2. **F6** — pin the Controller CA out-of-band for installs that leave the LAN.
+3. **F7** — firewall/bind the console port operationally.
 
 ## 5. Non-findings worth stating
 
