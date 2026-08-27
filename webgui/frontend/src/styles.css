@@ -111,3 +111,8 @@ button.primary:disabled { opacity: .6; }
 /* ---------- pop-out ---------- */
 .popout { position: fixed; inset: 0; background: #0b0f17; }
 .popout .term { padding: 6px; }
+
+/* Controller-proxied host markers */
+.dot.ok{background:#63c869}
+.dot.ctrl{background:#5580ee}
+.host-badge{margin-left:6px;font-size:10px;opacity:.6;text-transform:uppercase;letter-spacing:.04em}

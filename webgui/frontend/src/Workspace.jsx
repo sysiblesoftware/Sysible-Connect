@@ -14,11 +14,29 @@ export default function Workspace({ me, onLogout }) {
   const [cur, setCur] = useState(0)
   const [hosts, setHosts] = useState([])
   const [adding, setAdding] = useState(false)
+  const [ctrl, setCtrl] = useState({ connected: false })
+  const [ctrlForm, setCtrlForm] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const stageRef = useRef(null)
   const dragRef = useRef(null)   // { spaceIdx, splitId, dir }
 
   const loadHosts = () => api('hosts').then((d) => setHosts(d.hosts || [])).catch(() => {})
-  useEffect(() => { loadHosts() }, [])
+  const loadCtrl = () => api('controller').then(setCtrl).catch(() => {})
+  useEffect(() => { loadHosts(); loadCtrl() }, [])
+
+  const connectController = async ({ base_url, api_key }) => {
+    try { const s = await api('controller', { method: 'POST', json: { base_url, api_key } }); setCtrl(s); setCtrlForm(false); syncController() }
+    catch (e) { alert(e.message) }
+  }
+  const syncController = async () => {
+    setSyncing(true)
+    try { const d = await api('controller/sync', { method: 'POST' }); loadHosts(); alert(`Synced ${d.imported} host(s) from the Controller (${d.agents} agent, ${d.ssh_hosts} SSH).`) }
+    catch (e) { alert(e.message) } finally { setSyncing(false) }
+  }
+  const disconnectController = async () => {
+    if (!confirm('Disconnect the Controller? Synced hosts stay in your list but can no longer proxy terminals.')) return
+    try { await api('controller', { method: 'DELETE' }); loadCtrl() } catch (e) { alert(e.message) }
+  }
 
   // ---- tree ops on the current workspace ----
   const patch = (fn) => setSpaces((s) => s.map((w, i) => (i === cur ? fn(w) : w)))
@@ -87,17 +105,38 @@ export default function Workspace({ me, onLogout }) {
         <div className="side-sec">Terminals</div>
         <button className="side-btn" onClick={() => openTerminal({ kind: 'local', title: 'local' })}>＋ Local shell</button>
 
+        <div className="side-sec">Controller
+          {ctrl.connected
+            ? <button className="side-add" title="Sync the fleet from the Controller" disabled={syncing} onClick={syncController}>{syncing ? '…' : '⟳'}</button>
+            : <button className="side-add" title="Connect a Controller" onClick={() => setCtrlForm(true)}>＋</button>}
+        </div>
+        {ctrl.connected
+          ? <div className="side-host">
+              <span className="side-host-open" title={ctrl.base_url}><span className="dot ok" /> {ctrl.base_url.replace(/^https?:\/\//, '')}</span>
+              <button className="side-host-del" title="Disconnect" onClick={disconnectController}>✕</button>
+            </div>
+          : <div className="side-empty">Not connected.</div>}
+        {ctrlForm && <ConnectController onCancel={() => setCtrlForm(false)} onSave={connectController} />}
+
         <div className="side-sec">SSH hosts <button className="side-add" title="Add host" onClick={() => setAdding(true)}>＋</button></div>
         {hosts.length === 0 && <div className="side-empty">No hosts yet.</div>}
-        {hosts.map((h) => (
-          <div key={h.name} className="side-host">
-            <button className="side-host-open" title={`SSH ${h.user}@${h.address}:${h.port}`}
-              onClick={() => openTerminal({ kind: 'ssh', host: h.name, title: h.name })}>
-              <span className="dot" /> {h.name}
-            </button>
-            <button className="side-host-del" title="Remove" onClick={() => delHost(h.name)}>✕</button>
-          </div>
-        ))}
+        {hosts.map((h) => {
+          const viaCtrl = h.source === 'controller'
+          const kind = viaCtrl ? 'controller' : 'ssh'
+          const tip = viaCtrl
+            ? `via Controller (${h.transport || 'agent'}${h.environment ? ' · ' + h.environment : ''})`
+            : `SSH ${h.user}@${h.address}:${h.port}`
+          return (
+            <div key={h.name} className="side-host">
+              <button className="side-host-open" title={tip}
+                onClick={() => openTerminal({ kind, host: h.name, title: h.name })}>
+                <span className={'dot' + (viaCtrl ? ' ctrl' : '')} /> {h.name}
+                {viaCtrl && <span className="host-badge">{h.transport === 'ssh' ? 'ssh' : 'agent'}</span>}
+              </button>
+              <button className="side-host-del" title="Remove" onClick={() => delHost(h.name)}>✕</button>
+            </div>
+          )
+        })}
         {adding && <AddHost onCancel={() => setAdding(false)} onSave={addHost} />}
 
         <div className="side-foot">
@@ -163,6 +202,21 @@ function specOf(space, leafId) {
     return walk(n.a) || walk(n.b)
   }
   return walk(space.root)
+}
+
+function ConnectController({ onCancel, onSave }) {
+  const [f, setF] = useState({ base_url: '', api_key: '' })
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }))
+  return (
+    <div className="add-host">
+      <input placeholder="Controller URL (https://host:9000)" value={f.base_url} onChange={(e) => set('base_url', e.target.value)} autoFocus />
+      <input placeholder="Backend API key" type="password" value={f.api_key} onChange={(e) => set('api_key', e.target.value)} />
+      <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <button className="side-btn ghost" onClick={onCancel}>Cancel</button>
+        <button className="side-btn" onClick={() => onSave(f)}>Connect &amp; sync</button>
+      </div>
+    </div>
+  )
 }
 
 function AddHost({ onCancel, onSave }) {

@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from . import auth, hosts, terminals
+from . import auth, controller, hosts, terminals
 
 COOKIE = "sysible_connect_session"
 _DIST = Path(__file__).resolve().parent.parent / "webgui" / "frontend" / "dist"
@@ -89,6 +89,35 @@ def delete_host(name: str, user: str = Depends(current_user)):
     return {"deleted": hosts.delete_host(name)}
 
 
+# ------------------------------------------------------------------ controller
+@app.get("/api/controller")
+def controller_status(user: str = Depends(current_user)):
+    return controller.status()
+
+
+@app.post("/api/controller")
+def controller_connect(body: dict = Body(...), user: str = Depends(current_user)):
+    try:
+        return controller.connect(str(body.get("base_url") or "").strip(),
+                                  str(body.get("api_key") or "").strip())
+    except controller.ControllerError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/controller")
+def controller_disconnect(user: str = Depends(current_user)):
+    controller.disconnect()
+    return {"connected": False}
+
+
+@app.post("/api/controller/sync")
+def controller_sync(user: str = Depends(current_user)):
+    try:
+        return controller.sync()
+    except controller.ControllerError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ------------------------------------------------------------------ terminal
 @app.websocket("/api/terminal/ws")
 async def terminal_ws(ws: WebSocket):
@@ -103,12 +132,16 @@ async def terminal_ws(ws: WebSocket):
     except ValueError:
         cols, rows = 80, 24
     host = None
-    if kind == "ssh":
+    if kind in ("ssh", "controller"):
         host = hosts.get_host(ws.query_params.get("host", ""))
         if not host:
             await ws.send_json({"t": "error", "d": "Host not found."})
             await ws.close()
             return
+        # Route by where the host came from, not just the requested kind: a host
+        # synced from a Controller proxies through it (works for NAT'd agent hosts
+        # with no inbound SSH); a locally-added host uses direct SSH.
+        kind = "controller" if host.get("source") == "controller" else "ssh"
     try:
         sess = terminals.open_session(kind, host=host, cols=cols, rows=rows)
     except Exception as e:  # noqa: BLE001 — surface the connect error to the terminal

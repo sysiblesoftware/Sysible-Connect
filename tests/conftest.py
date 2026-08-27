@@ -22,9 +22,12 @@ import backend.hosts as hosts  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _isolate():
-    """Empty host store + a seeded admin before every test, so order never matters."""
+    """Empty host store, no Controller connection, and a seeded admin before every
+    test, so order never matters."""
     with hosts._LOCK:
         hosts._save({})
+    import backend.controller as controller
+    controller.disconnect()
     auth.ensure_admin()
     yield
 

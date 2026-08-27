@@ -64,6 +64,13 @@ def list_hosts() -> list[dict]:
             "name": name, "address": h.get("address", ""), "user": h.get("user", "root"),
             "port": int(h.get("port", 22)),
             "has_password": bool(h.get("password")), "has_key": bool(h.get("key")),
+            # Where the host came from and how a terminal reaches it: a "local" host
+            # is dialed by direct SSH; a "controller" host proxies through the
+            # connected Controller (transport = agent | ssh), so it works even with
+            # no address / no inbound SSH.
+            "source": h.get("source", "local"),
+            "environment": h.get("environment", ""),
+            "transport": h.get("transport", ""),
         })
     return out
 
@@ -87,7 +94,33 @@ def add_host(name: str, address: str, user: str = "root", port: int = 22,
     with _LOCK:
         hosts = _load()
         hosts[name] = {"address": address, "user": user, "port": int(port),
-                       "password": password or "", "key": key or ""}
+                       "password": password or "", "key": key or "", "source": "local"}
+        _save(hosts)
+
+
+def upsert_controller_host(name: str, address: str = "", user: str = "root", port: int = 22,
+                           environment: str = "", transport: str = "agent") -> None:
+    """Add/update a host synced from the connected Controller. Its terminal proxies
+    THROUGH the Controller (by name), so a blank/NAT'd address is fine — we just skip
+    an invalid one rather than fail the whole sync. Overwrites a prior sync of the
+    same name; carries no credentials (the Controller holds those)."""
+    if not valid_name(name):
+        raise ValueError("Invalid host name.")
+    if address and not valid_host(address):
+        address = ""           # unusable for display, but the proxy doesn't need it
+    if not valid_user(user):
+        user = "root"
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        port = 22
+    if not (1 <= port <= 65535):
+        port = 22
+    with _LOCK:
+        hosts = _load()
+        hosts[name] = {"address": address, "user": user, "port": port,
+                       "password": "", "key": "", "source": "controller",
+                       "environment": environment or "", "transport": transport or "agent"}
         _save(hosts)
 
 
