@@ -129,3 +129,23 @@ def test_controller_key_encrypted_at_rest(auth_client, monkeypatch):
     assert "SECRET-KEY-123" not in raw          # not plaintext
     assert "api_key_enc" in raw                  # stored encrypted
     assert controller._load()["api_key"] == "SECRET-KEY-123"   # round-trips in memory
+
+
+def test_connect_with_username_password(auth_client, monkeypatch):
+    # Username/password path: exchange creds at /auth/api-key, then validate the key.
+    monkeypatch.setattr(controller.requests, "post",
+                        lambda url, json=None, verify=None, timeout=None: _Resp(200, {"api_key": "EXCH-KEY"}))
+    monkeypatch.setattr(controller.requests, "request",
+                        _fake_api({("GET", "/remote/hosts"): _Resp(200, {})}))
+    r = auth_client.post("/api/controller", json={"base_url": "https://ctrl:9000",
+                                                  "username": "admin", "password": "pw"})
+    assert r.status_code == 200 and r.json()["connected"] is True
+    assert controller._load()["api_key"] == "EXCH-KEY"
+
+
+def test_connect_creds_rejected(auth_client, monkeypatch):
+    monkeypatch.setattr(controller.requests, "post",
+                        lambda url, json=None, verify=None, timeout=None: _Resp(401, {"detail": "bad creds"}))
+    r = auth_client.post("/api/controller", json={"base_url": "https://ctrl:9000",
+                                                  "username": "admin", "password": "wrong"})
+    assert r.status_code == 400 and "bad creds" in r.json()["detail"]

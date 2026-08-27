@@ -30,8 +30,8 @@ export default function Workspace({ me, onLogout }) {
   const loadCtrl = () => api('controller').then(setCtrl).catch(() => {})
   useEffect(() => { loadHosts(); loadCtrl() }, [])
 
-  const connectController = async ({ base_url, api_key }) => {
-    try { const s = await api('controller', { method: 'POST', json: { base_url, api_key } }); setCtrl(s); setCtrlForm(false); syncController() }
+  const connectController = async (form) => {
+    try { const s = await api('controller', { method: 'POST', json: form }); setCtrl(s); setCtrlForm(false); syncController() }
     catch (e) { alert(e.message) }
   }
   const syncController = async () => {
@@ -345,15 +345,26 @@ function FleetResults({ data, onClose }) {
 }
 
 function ConnectController({ onCancel, onSave }) {
-  const [f, setF] = useState({ base_url: '', api_key: '' })
+  const [f, setF] = useState({ base_url: '', username: '', password: '', totp_code: '', api_key: '' })
+  const [useKey, setUseKey] = useState(false)
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }))
   return (
     <div className="add-host">
       <input placeholder="Controller URL (https://host:9000)" value={f.base_url} onChange={(e) => set('base_url', e.target.value)} autoFocus />
-      <input placeholder="Backend API key" type="password" value={f.api_key} onChange={(e) => set('api_key', e.target.value)} />
+      {useKey ? (
+        <input placeholder="Backend API key" type="password" value={f.api_key} onChange={(e) => set('api_key', e.target.value)} />
+      ) : (
+        <>
+          <input placeholder="Username" value={f.username} onChange={(e) => set('username', e.target.value)} />
+          <input placeholder="Password" type="password" value={f.password} onChange={(e) => set('password', e.target.value)} />
+          <input placeholder="MFA code (if enabled)" value={f.totp_code} onChange={(e) => set('totp_code', e.target.value)} />
+        </>
+      )}
+      <button className="link" style={{ background: 'none', border: 0, padding: 0, textAlign: 'left', cursor: 'pointer', fontSize: 12 }}
+        onClick={() => setUseKey((v) => !v)}>{useKey ? 'Use username & password instead' : 'Use a backend API key instead'}</button>
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <button className="side-btn ghost" onClick={onCancel}>Cancel</button>
-        <button className="side-btn" onClick={() => onSave(f)}>Connect &amp; sync</button>
+        <button className="side-btn" onClick={() => onSave(useKey ? { base_url: f.base_url, api_key: f.api_key } : { base_url: f.base_url, username: f.username, password: f.password, totp_code: f.totp_code })}>Connect &amp; sync</button>
       </div>
     </div>
   )

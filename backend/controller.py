@@ -73,6 +73,56 @@ def status() -> dict:
             "base_url": cfg.get("base_url", "")}
 
 
+def connect_with_credentials(base_url: str, username: str, password: str, totp_code: str = "") -> dict:
+    """Connect using a Controller superuser's console username + password: exchange
+    them for the backend API key via POST /auth/api-key (the friendly path, same as
+    SLEP), TOFU-pin the cert, then save. Returns the public status."""
+    base = _normalize(base_url)
+    if not base:
+        raise ControllerError("Controller URL is required.")
+    if not (username and password):
+        raise ControllerError("Controller username and password are required.")
+    _guard_url(base)
+    payload = {"username": username, "password": password}
+    if totp_code:
+        payload["totp_code"] = totp_code
+    cert = ""
+    try:
+        resp = requests.post(base + "/auth/api-key", json=payload, verify=True, timeout=20)
+    except requests.exceptions.SSLError:
+        cert = _fetch_server_cert(base)
+        resp = requests.post(base + "/auth/api-key", json=payload, verify=_ca_path(cert), timeout=20)
+    except requests.exceptions.RequestException as e:
+        raise ControllerError(f"could not reach the Controller at {base}: {e}")
+    if resp.status_code == 404:
+        raise ControllerError("This Controller doesn't support username/password connect (older "
+                              "build) — use its backend API key instead.")
+    if resp.status_code in (401, 403, 429):
+        detail = "The Controller rejected those credentials."
+        try:
+            detail = resp.json().get("detail") or detail
+        except ValueError:
+            pass
+        raise ControllerError(detail)
+    if resp.status_code != 200:
+        raise ControllerError(f"The Controller returned HTTP {resp.status_code}.")
+    try:
+        data = resp.json()
+    except ValueError:
+        raise ControllerError("The Controller's response was not JSON.")
+    if data.get("status") == "mfa_required":
+        raise ControllerError("This account uses multi-factor authentication — add the current code.")
+    key = data.get("api_key")
+    if not key:
+        raise ControllerError("The Controller did not return an API key.")
+    cfg = {"base_url": base, "api_key": str(key), "tls_cert": cert}
+    r = _request(cfg, "GET", "/remote/hosts")   # validate the exchanged key
+    if r.status_code != 200:
+        raise ControllerError(f"Connected, but /remote/hosts returned HTTP {r.status_code}.")
+    _save(cfg)
+    return status()
+
+
 def disconnect() -> None:
     for p in (_CFG, _CA):
         try:

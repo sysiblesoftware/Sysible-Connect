@@ -197,9 +197,15 @@ def controller_status(user: str = Depends(current_user)):
 
 @app.post("/api/controller")
 def controller_connect(body: dict = Body(...), user: str = Depends(current_user)):
+    b = body or {}
+    base = str(b.get("base_url") or "").strip()
     try:
-        return controller.connect(str(body.get("base_url") or "").strip(),
-                                  str(body.get("api_key") or "").strip())
+        # Prefer username/password (the friendly path) when provided; else the API key.
+        if b.get("username") or b.get("password"):
+            return controller.connect_with_credentials(
+                base, str(b.get("username") or "").strip(), str(b.get("password") or ""),
+                str(b.get("totp_code") or "").strip())
+        return controller.connect(base, str(b.get("api_key") or "").strip())
     except controller.ControllerError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
