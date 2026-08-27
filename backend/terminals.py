@@ -19,6 +19,40 @@ import struct
 import subprocess
 import termios
 
+from .auth import DATA_DIR
+
+# Persistent SSH known-hosts for the DIRECT-SSH path: trust a host's key on first
+# contact and pin it, so a later key change (host rebuilt, or a man-in-the-middle)
+# is rejected instead of silently trusted.
+_KNOWN_HOSTS = DATA_DIR / "known_hosts"
+
+
+def _load_known_hosts(client) -> None:
+    try:
+        if _KNOWN_HOSTS.exists():
+            client.load_host_keys(str(_KNOWN_HOSTS))
+    except Exception:  # noqa: BLE001 — a corrupt file must not block connecting
+        pass
+
+
+def _tofu_policy():
+    """A paramiko MissingHostKeyPolicy that records an unknown host's key and saves
+    it. A host already pinned with a DIFFERENT key raises BadHostKeyException in
+    paramiko's own verification (before this runs), which is the pin."""
+    import paramiko
+
+    class _Tofu(paramiko.MissingHostKeyPolicy):
+        def missing_host_key(self, client, hostname, key):
+            hk = client.get_host_keys()
+            hk.add(hostname, key.get_name(), key)
+            try:
+                DATA_DIR.mkdir(parents=True, exist_ok=True)
+                hk.save(str(_KNOWN_HOSTS))
+            except Exception:  # noqa: BLE001
+                pass
+
+    return _Tofu()
+
 
 class LocalSession:
     """A login shell on the Connect host, wired to a PTY."""
@@ -92,18 +126,26 @@ class SshSession:
         user = str(host.get("user") or "root")
         port = int(host.get("port", 22))
         self.client = paramiko.SSHClient()
-        # TODO: pin host keys (known_hosts) — AutoAdd is the MVP default.
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # Pin host keys (trust-on-first-use): load what we've seen before, and record
+        # a new host's key on first contact. A CHANGED key raises BadHostKeyException.
+        _load_known_hosts(self.client)
+        self.client.set_missing_host_key_policy(_tofu_policy())
         base = dict(hostname=addr, port=port, username=user, timeout=20, banner_timeout=20)
-        if host.get("key"):
-            self.client.connect(pkey=_load_private_key(host["key"]),
-                                allow_agent=False, look_for_keys=False, **base)
-        elif host.get("password"):
-            self.client.connect(password=host["password"],
-                                allow_agent=False, look_for_keys=False, **base)
-        else:
-            # No stored credential — fall back to the agent / default keys.
-            self.client.connect(allow_agent=True, look_for_keys=True, **base)
+        try:
+            if host.get("key"):
+                self.client.connect(pkey=_load_private_key(host["key"]),
+                                    allow_agent=False, look_for_keys=False, **base)
+            elif host.get("password"):
+                self.client.connect(password=host["password"],
+                                    allow_agent=False, look_for_keys=False, **base)
+            else:
+                # No stored credential — fall back to the agent / default keys.
+                self.client.connect(allow_agent=True, look_for_keys=True, **base)
+        except paramiko.BadHostKeyException as e:
+            raise ValueError(
+                f"Host key for {addr} changed since first contact — refusing to connect "
+                f"(possible man-in-the-middle, or the host was rebuilt). If you trust the "
+                f"change, remove its line from {_KNOWN_HOSTS} and reconnect. ({e})")
         self.chan = self.client.invoke_shell(term="xterm-256color", width=cols, height=rows)
         self.chan.settimeout(None)   # blocking recv → one reader thread per session
 
