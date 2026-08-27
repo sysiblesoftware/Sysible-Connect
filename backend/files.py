@@ -24,8 +24,13 @@ def _connect(name: str):
     if not h:
         raise FileError("host not found")
     if h.get("source") == "controller":
-        raise FileError("File transfer for Controller-managed hosts needs a Controller-scoped "
-                        "token (F1). Open a terminal on this host instead.")
+        # F1: the Controller now supports machine-key file access when the admin opts in
+        # (SYSIBLE_REMOTE_FILE_API=1). Proxying it here (upload/download to the
+        # Controller's SSH-transport file endpoints) is the next step; for now, direct
+        # file transfer is for locally-added SSH hosts, and terminals cover the rest.
+        raise FileError("File transfer for Controller-managed hosts is proxied through the "
+                        "Controller (enable SYSIBLE_REMOTE_FILE_API there); not wired in Connect "
+                        "yet. Open a terminal on this host, or add it as a direct SSH host.")
     addr = str(h.get("address", "")).strip("[]")
     if not addr:
         raise FileError("This host has no address to connect to.")

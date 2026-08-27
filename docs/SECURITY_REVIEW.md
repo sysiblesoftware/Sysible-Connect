@@ -45,7 +45,16 @@ review, not a full per-service audit. Findings are ranked; the ones marked
 
 ## 3. Findings
 
-### F1 — Connect's Controller API key concentrates authority · **High**
+### F1 — Connect's Controller API key concentrates authority · **High** · **(capability added)**
+Controller-side capability now landed (CE + EE): the `/remote` file endpoints accept
+the machine key when the operator opts in with `SYSIBLE_REMOTE_FILE_API=1`, with
+env-scoped keys confined per host — so Connect can be given a **scoped** key instead
+of a root/superuser token. Recommended posture: issue Connect an **environment-scoped**
+machine key and enable only the capabilities it needs. Remaining: forward an operator
+identity so the Controller attributes proxied sessions to a person (below), and wire
+Connect to proxy file transfer through the Controller.
+
+Original finding:
 Connect proxies terminals with the Controller **machine API key and no admin
 token**. The Controller's `_check_terminal_owner` treats a token-less call as
 trusted (the API key *is* the boundary there), so **whoever can sign into Connect

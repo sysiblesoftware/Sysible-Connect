@@ -10,7 +10,7 @@ def test_files_controller_host_rejected(auth_client):
     # A controller-synced host can't do file transfer with just the machine key (F1).
     hosts.upsert_controller_host("web1", address="10.0.0.11", transport="agent")
     r = auth_client.post("/api/hosts/web1/files/list", json={"path": "."})
-    assert r.status_code == 400 and "Controller-scoped token" in r.json()["detail"]
+    assert r.status_code == 400 and "Controller" in r.json()["detail"]
 
 
 def test_files_missing_host(auth_client):
