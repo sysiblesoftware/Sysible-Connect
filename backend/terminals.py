@@ -82,6 +82,17 @@ class LocalSession:
         except OSError:
             return b""
 
+    def read_available(self, timeout: float = 0.7) -> bytes:
+        """Non-blocking-ish read for fleet capture: up to `timeout` seconds, b'' if idle."""
+        import select
+        r, _, _ = select.select([self.master], [], [], timeout)
+        if not r:
+            return b""
+        try:
+            return os.read(self.master, 65536)
+        except OSError:
+            return b""
+
     def write(self, data: bytes):
         try:
             os.write(self.master, data)
@@ -154,6 +165,18 @@ class SshSession:
             return self.chan.recv(n)          # b"" on EOF
         except Exception:  # noqa: BLE001
             return b""
+
+    def read_available(self, timeout: float = 0.7) -> bytes:
+        self.chan.settimeout(timeout)
+        try:
+            return self.chan.recv(65536)
+        except Exception:  # noqa: BLE001 — timeout / no data
+            return b""
+        finally:
+            try:
+                self.chan.settimeout(None)
+            except Exception:  # noqa: BLE001
+                pass
 
     def write(self, data: bytes):
         try:

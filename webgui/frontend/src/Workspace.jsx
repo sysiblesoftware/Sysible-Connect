@@ -21,6 +21,7 @@ export default function Workspace({ me, onLogout }) {
   const [syncing, setSyncing] = useState(false)
   const [ping, setPing] = useState({})        // host name -> {reachable, ms, detail}
   const [pinging, setPinging] = useState(false)
+  const [fleet, setFleet] = useState(null)    // {label, loading} | {label, results}
   const stageRef = useRef(null)
   const dragRef = useRef(null)   // { spaceIdx, splitId, dir }
 
@@ -104,6 +105,19 @@ export default function Workspace({ me, onLogout }) {
     try { const d = await api('hosts/ping', { method: 'POST' }); setPing(Object.fromEntries((d.results || []).map((r) => [r.name, r]))) }
     catch (e) { alert(e.message) } finally { setPinging(false) }
   }
+
+  // ---- fleet actions: run one command across every host ----
+  const fleetRun = async (command, label) => {
+    if (!hosts.length) { alert('No hosts yet.'); return }
+    setFleet({ label, loading: true })
+    try { const d = await api('fleet/run', { method: 'POST', json: { command } }); setFleet({ label, results: d.results || [] }) }
+    catch (e) { setFleet(null); alert(e.message) }
+  }
+  const runScriptAll = () => { const c = prompt('Command to run on ALL hosts:'); if (c && c.trim()) fleetRun(c, 'Run on all') }
+  const restartAgentAll = () => { if (confirm('Restart the Sysible agent on all hosts?')) fleetRun('sudo systemctl restart sysible-agent', 'Restart agent') }
+  const dangerAll = (word, cmd, label) => {
+    if (prompt(`This will ${label.toUpperCase()} every host. Type ${word} to confirm:`) === word) fleetRun(cmd, label)
+  }
   const logout = async () => { try { await api('logout', { method: 'POST' }) } catch { /* */ } onLogout() }
 
   // Group hosts by environment for the sidebar (Unassigned last).
@@ -172,6 +186,14 @@ export default function Workspace({ me, onLogout }) {
         ))}
         {adding && <AddHost onCancel={() => setAdding(false)} onSave={addHost} />}
 
+        {hosts.length > 0 && <>
+          <div className="side-sec">Fleet actions</div>
+          <button className="side-btn ghost sm" onClick={runScriptAll}>Run script on all…</button>
+          <button className="side-btn ghost sm" onClick={restartAgentAll}>Restart agent on all</button>
+          <button className="side-btn ghost sm danger" onClick={() => dangerAll('REBOOT', 'sudo reboot', 'reboot')}>Reboot all</button>
+          <button className="side-btn ghost sm danger" onClick={() => dangerAll('POWEROFF', 'sudo poweroff', 'power off')}>Power off all</button>
+        </>}
+
         <div className="side-foot">
           <span className="muted">{me.user}</span>
           <button className="side-btn ghost" onClick={logout}>Sign out</button>
@@ -221,6 +243,8 @@ export default function Workspace({ me, onLogout }) {
           })}
         </div>
       </main>
+
+      {fleet && <FleetResults data={fleet} onClose={() => setFleet(null)} />}
     </div>
   )
 }
@@ -235,6 +259,31 @@ function specOf(space, leafId) {
     return walk(n.a) || walk(n.b)
   }
   return walk(space.root)
+}
+
+function FleetResults({ data, onClose }) {
+  const ok = (data.results || []).filter((r) => r.ok).length
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-h">
+          <b>{data.label}</b>
+          {data.loading ? <span className="muted"> · running…</span>
+            : <span className="muted"> · {ok}/{data.results.length} ok</span>}
+          <button className="side-host-del" style={{ marginLeft: 'auto' }} onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          {data.loading && <div className="muted">Running across all hosts…</div>}
+          {(data.results || []).map((r) => (
+            <div key={r.name} className="fleet-row">
+              <div className="fleet-name"><span className={'dot' + (r.ok ? ' up' : ' down')} /> {r.name}</div>
+              {r.output && <pre className="fleet-out">{r.output}</pre>}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function ConnectController({ onCancel, onSave }) {

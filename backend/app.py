@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from . import auth, controller, hosts, terminals
+from . import auth, controller, fleet, hosts, terminals
 
 COOKIE = "sysible_connect_session"
 _DIST = Path(__file__).resolve().parent.parent / "webgui" / "frontend" / "dist"
@@ -179,6 +179,21 @@ def controller_sync(user: str = Depends(current_user)):
     try:
         return controller.sync()
     except controller.ControllerError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---------------------------------------------------------------- fleet actions
+@app.post("/api/fleet/run")
+def fleet_run(body: dict = Body(...), user: str = Depends(current_user)):
+    """Run one command across hosts (default: all). Uses the terminal transport, so
+    it reaches agent, SSH, and local hosts alike. Returns per-host output."""
+    command = str(body.get("command") or "")
+    names = body.get("hosts")
+    if not names:
+        names = [h["name"] for h in hosts.list_hosts()]
+    try:
+        return {"results": fleet.run(command, list(names))}
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 

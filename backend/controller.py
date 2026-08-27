@@ -283,6 +283,24 @@ class TerminalProxy:
             # idle long-poll returned nothing — poll again (the Controller side waits)
         return b""
 
+    def read_available(self, timeout: float = 0.7) -> bytes:
+        """One read poll for fleet capture (the Controller side long-polls briefly and
+        returns, possibly empty). b'' means idle-or-closed."""
+        if self._closed:
+            return b""
+        try:
+            r = _request(self._cfg, "GET", f"/remote/terminal/{self._sid}/read", timeout=60)
+        except ControllerError:
+            self._closed = True
+            return b""
+        if r.status_code != 200:
+            self._closed = True
+            return b""
+        body = r.json()
+        if body.get("closed"):
+            self._closed = True
+        return (body.get("data") or "").encode("utf-8", "replace")
+
     def write(self, data: bytes):
         try:
             _request(self._cfg, "POST", f"/remote/terminal/{self._sid}/write",
