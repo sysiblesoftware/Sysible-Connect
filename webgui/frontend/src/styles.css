@@ -1,7 +1,9 @@
 :root {
-  --bg: #070a10; --panel: #0e1420; --panel2: #131b29; --line: #223047;
-  --text: #d5deee; --muted: #8b98ad; --faint: #5b6779;
-  --accent: #3d7bd1; --green: #63c869; --red: #e5534b;
+  /* Sysible Enterprise palette — matched to Sysible Controller / SLEP (the "brand"
+     skin): near-black graphite ground, periwinkle accent, brand green. */
+  --bg: #0d1117; --panel: #12161f; --panel2: #161b26; --line: #223047;
+  --text: #e9f0f7; --muted: #9aa7bd; --faint: #7d8ca3;
+  --accent: #8c95cf; --green: #6ddb73; --red: #e5534b;
 }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
@@ -116,3 +118,16 @@ button.primary:disabled { opacity: .6; }
 .dot.ok{background:#63c869}
 .dot.ctrl{background:#5580ee}
 .host-badge{margin-left:6px;font-size:10px;opacity:.6;text-transform:uppercase;letter-spacing:.04em}
+
+/* ---------- enterprise login + brand ---------- */
+.login { align-items: stretch; }
+.login-head { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-bottom: 6px; }
+.login-brand { font-size: 20px; letter-spacing: .3px; }
+.login-brand b { color: var(--accent); }
+.login-sub { color: var(--muted); font-size: 12.5px; }
+.login-label { color: var(--muted); font-size: 13px; }
+.login-foot { text-align: center; color: var(--faint); font-size: 11px; letter-spacing: .06em;
+  text-transform: uppercase; margin-top: 6px; }
+.side-brand { display: flex; align-items: center; gap: 8px; }
+.side-brand svg { flex: 0 0 auto; }
+.side-brand b { color: var(--accent); }

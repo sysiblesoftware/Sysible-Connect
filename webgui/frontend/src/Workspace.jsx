@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
 import Terminal from './Terminal.jsx'
+import Logo from './Logo.jsx'
 import { leaf, splitLeaf, closeLeaf, setRatio, firstLeafId, layout } from './layout.js'
 
-let _ws = 1
+let _ws = 0
 const newWorkspace = (spec) => {
+  const n = ++_ws                    // 1, 2, 3 … (pre-increment: the first is "Workspace 1")
   const root = leaf(spec || { kind: 'local', title: 'local' })
-  return { id: 'ws' + (_ws++), name: 'Workspace ' + _ws, root, active: root.id }
+  return { id: 'ws' + n, name: 'Workspace ' + n, root, active: root.id }
 }
 
 export default function Workspace({ me, onLogout }) {
@@ -100,7 +102,7 @@ export default function Workspace({ me, onLogout }) {
   return (
     <div className="connect-shell">
       <aside className="side">
-        <div className="side-brand">Sysible <b>Connect</b></div>
+        <div className="side-brand"><Logo size={22} /> <span>Sysible <b>Connect</b></span></div>
 
         <div className="side-sec">Terminals</div>
         <button className="side-btn" onClick={() => openTerminal({ kind: 'local', title: 'local' })}>＋ Local shell</button>
@@ -156,8 +158,8 @@ export default function Workspace({ me, onLogout }) {
           ))}
           <button className="tab-add" title="New workspace" onClick={() => { setSpaces((s) => [...s, newWorkspace()]); setCur(spaces.length) }}>＋</button>
           <div className="tab-tools">
-            <button className="tool" title="Split right" onClick={() => splitActive('row')}>⬌</button>
-            <button className="tool" title="Split down" onClick={() => splitActive('col')}>⬍</button>
+            <button className="tool" title="Split right — new pane beside this one" onClick={() => splitActive('row')}>◫</button>
+            <button className="tool" title="Split down — new pane below this one" onClick={() => splitActive('col')}>⊟</button>
             <button className="tool" title="Pop out" onClick={popOut}>⇱</button>
             <button className="tool danger" title="Close pane" onClick={closeActive}>✕</button>
           </div>

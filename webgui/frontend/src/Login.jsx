@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { api } from './api.js'
+import Logo from './Logo.jsx'
 
 export default function Login({ onAuthed }) {
   const [u, setU] = useState('')
@@ -25,10 +26,14 @@ export default function Login({ onAuthed }) {
   return (
     <div className="login-wrap">
       <form className="login" onSubmit={changing ? changePw : submit}>
-        <div className="login-brand">Sysible <b>Connect</b></div>
+        <div className="login-head">
+          <Logo size={52} />
+          <div className="login-brand">Sysible <b>Connect</b></div>
+          <div className="login-sub">Fleet terminal workspace</div>
+        </div>
         {changing ? (
           <>
-            <div className="muted">Choose a new password (at least 8 characters).</div>
+            <label className="login-label">Choose a new password (at least 8 characters).</label>
             <input type="password" placeholder="New password" value={np} autoFocus
               onChange={(e) => setNp(e.target.value)} />
           </>
@@ -40,6 +45,7 @@ export default function Login({ onAuthed }) {
         )}
         {err && <div className="login-err">{err}</div>}
         <button className="primary" disabled={busy}>{busy ? '…' : changing ? 'Set password' : 'Sign in'}</button>
+        <div className="login-foot">Sysible Enterprise</div>
       </form>
     </div>
   )
