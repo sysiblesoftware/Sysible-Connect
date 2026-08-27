@@ -46,15 +46,22 @@ def _save(rec: dict) -> None:
 
 
 def ensure_admin() -> None:
-    """Seed the admin account from the env on first run (idempotent)."""
+    """Seed the admin account on first run (idempotent). If no password is provided
+    via the env, generate a RANDOM one (printed once to the logs) and flag the
+    account must-change — so there is never a standing admin/admin default login."""
     rec = _load()
     if rec.get("user"):
         return
     user = os.getenv("SYSIBLE_CONNECT_USER") or "admin"
-    pw = os.getenv("SYSIBLE_CONNECT_PASSWORD") or "admin"
+    env_pw = os.getenv("SYSIBLE_CONNECT_PASSWORD")
+    if env_pw:
+        pw, must = env_pw, False
+    else:
+        pw, must = secrets.token_urlsafe(12), True
+        print(f"[sysible-connect] first-run admin '{user}' password "
+              f"(you'll be asked to change it on first login): {pw}", flush=True)
     salt = secrets.token_bytes(16)
-    _save({"user": user, "salt": salt.hex(), "hash": _hash(pw, salt),
-           "must_change": pw == "admin"})
+    _save({"user": user, "salt": salt.hex(), "hash": _hash(pw, salt), "must_change": must})
 
 
 def verify(user: str, password: str) -> bool:

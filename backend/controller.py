@@ -16,8 +16,10 @@ browser.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import socket
 import ssl
 from pathlib import Path
 from urllib.parse import urlparse
@@ -75,6 +77,29 @@ def _normalize(url: str) -> str:
     return url
 
 
+def _guard_url(url: str) -> None:
+    """SSRF guard (parity with SLEP): resolve the Controller host and refuse
+    loopback, link-local (incl. cloud metadata 169.254.169.254), unspecified,
+    multicast and reserved addresses, so 'connect a Controller' can't be aimed at an
+    internal service. Private LAN ranges stay allowed (real on-prem Controllers)."""
+    host = urlparse(url).hostname or ""
+    if not host:
+        raise ControllerError("Invalid Controller URL.")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return  # let the real request surface a clean DNS error
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved:
+            raise ControllerError(
+                f"Refusing to connect to {host} ({ip}): loopback/link-local/reserved "
+                "addresses (including cloud metadata) are blocked.")
+
+
 # ------------------------------------------------------------------ TLS TOFU
 def _ca_path(pem: str) -> str | None:
     if not pem:
@@ -122,6 +147,7 @@ def connect(base_url: str, api_key: str) -> dict:
     base = _normalize(base_url)
     if not base or not api_key:
         raise ControllerError("Controller URL and API key are both required.")
+    _guard_url(base)
     cfg = {"base_url": base, "api_key": str(api_key), "tls_cert": ""}
     r = _request(cfg, "GET", "/remote/hosts")
     if r.status_code in (401, 403):

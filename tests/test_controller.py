@@ -111,3 +111,10 @@ def test_terminal_proxy_agent_offline(monkeypatch):
         assert False, "should have raised"
     except controller.ControllerError as e:
         assert "agent" in str(e).lower()
+
+
+def test_connect_refuses_loopback(auth_client):
+    # SSRF guard: a Controller URL resolving to loopback/metadata is rejected before
+    # any request is made.
+    r = auth_client.post("/api/controller", json={"base_url": "https://127.0.0.1:9000", "api_key": "K"})
+    assert r.status_code == 400 and "loopback" in r.json()["detail"].lower()

@@ -31,14 +31,26 @@ def current_user(request: Request) -> str:
     return user
 
 
+def _is_https(request: Request) -> bool:
+    """True if the client's connection is TLS — directly, or via a terminating proxy
+    that sets X-Forwarded-Proto. Gates the cookie's Secure attribute."""
+    if request.url.scheme == "https":
+        return True
+    xfp = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    return xfp == "https"
+
+
 @app.post("/api/login")
-def login(response: Response, body: dict = Body(...)):
+def login(request: Request, response: Response, body: dict = Body(...)):
     user = str(body.get("username") or "").strip()
     pw = str(body.get("password") or "")
     if not auth.verify(user, pw):
         raise HTTPException(status_code=401, detail="Invalid username or password.")
     token = auth.new_session(user)
-    response.set_cookie(COOKIE, token, httponly=True, samesite="lax", max_age=12 * 3600)
+    # Secure when served over TLS (the default) so the session cookie never rides
+    # plain HTTP; omitted on a plain-HTTP dev/proxy setup so login still works there.
+    response.set_cookie(COOKIE, token, httponly=True, samesite="lax",
+                        secure=_is_https(request), max_age=12 * 3600)
     return {"user": user, "must_change": auth.must_change()}
 
 
