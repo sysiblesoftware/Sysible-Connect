@@ -1,45 +1,59 @@
+"""Security: SSH host fields (name / address / user) are strictly validated on
+ingest so nothing option-looking or shell-metacharacter-laden is ever stored.
+
+Connect opens SSH sessions with paramiko (hostname/username/port as separate
+parameters — no shell argv), so there is no ssh-option-injection surface even
+before this; the validation is defense-in-depth and keeps the stored inventory
+clean. `POST /api/hosts` answers 400 on a rejected field.
 """
-Security regression: a stored SSH host's `user`/`ip` flow into the ssh command
-line (`user@ip` as the destination). A value like `-oProxyCommand=...` would be
-parsed by ssh as an option and run code on the CONTROLLER as root. Reject such
-values at ingest (charset validation), and keep the `--` separator in the argv.
-"""
-from conftest import key_headers
 
 
-def _add(controller, headers, **body):
-    return controller.post("/remote/hosts", headers=headers, json=body)
+def _add(auth_client, **body):
+    return auth_client.post("/api/hosts", json=body)
 
 
-class TestHostFieldValidation:
-    def test_option_injection_user_rejected(self, controller, superuser_headers):
-        r = _add(controller, superuser_headers, name="evil", ip="1.2.3.4",
-                 user="-oProxyCommand=sh -c id #")
-        assert r.status_code == 422, r.text
-
-    def test_metachars_in_ip_rejected(self, controller, superuser_headers):
-        r = _add(controller, superuser_headers, name="evil2", ip="1.2.3.4; touch /tmp/x",
-                 user="root")
-        assert r.status_code == 422
-
-    def test_leading_dash_ip_rejected(self, controller, superuser_headers):
-        r = _add(controller, superuser_headers, name="evil3", ip="-oProxyCommand=x",
-                 user="root")
-        assert r.status_code == 422
-
-    def test_bad_name_rejected(self, controller, superuser_headers):
-        r = _add(controller, superuser_headers, name="../etc", ip="1.2.3.4", user="root")
-        assert r.status_code == 422
-
-    def test_normal_host_accepted(self, controller, superuser_headers):
-        r = _add(controller, superuser_headers, name="web-01", ip="10.0.0.5", user="deploy")
-        # 200 (added) or a benign non-422 — the point is it's NOT rejected as invalid input.
-        assert r.status_code != 422, r.text
+def test_option_injection_user_rejected(auth_client):
+    r = _add(auth_client, name="evil", address="1.2.3.4", user="-oProxyCommand=sh -c id #")
+    assert r.status_code == 400, r.text
 
 
-def test_ssh_argv_has_double_dash_separator():
-    from backend import remote_routes
-    argv = remote_routes._ssh_argv("/tmp/key", "root@10.0.0.5", "id")
-    assert "--" in argv
-    assert argv.index("--") < argv.index("root@10.0.0.5")
-    assert argv.index("root@10.0.0.5") < argv.index("id")
+def test_metachars_in_address_rejected(auth_client):
+    r = _add(auth_client, name="evil2", address="1.2.3.4; touch /tmp/x", user="root")
+    assert r.status_code == 400
+
+
+def test_leading_dash_address_rejected(auth_client):
+    r = _add(auth_client, name="evil3", address="-oProxyCommand=x", user="root")
+    assert r.status_code == 400
+
+
+def test_space_in_address_rejected(auth_client):
+    r = _add(auth_client, name="evil4", address="1.2.3.4 -oProxyCommand=x", user="root")
+    assert r.status_code == 400
+
+
+def test_bad_name_rejected(auth_client):
+    r = _add(auth_client, name="../etc/passwd", address="1.2.3.4", user="root")
+    assert r.status_code == 400
+
+
+def test_bad_port_rejected(auth_client):
+    r = _add(auth_client, name="p", address="1.2.3.4", user="root", port=70000)
+    assert r.status_code == 400
+
+
+def test_valid_host_accepted(auth_client):
+    r = _add(auth_client, name="web1", address="10.0.0.5", user="deploy", port=2222)
+    assert r.status_code == 200, r.text
+    names = [h["name"] for h in auth_client.get("/api/hosts").json()["hosts"]]
+    assert "web1" in names
+
+
+def test_valid_ipv6_and_hostname_accepted(auth_client):
+    assert _add(auth_client, name="v6", address="[2001:db8::1]", user="root").status_code == 200
+    assert _add(auth_client, name="dns", address="host.example.com", user="root").status_code == 200
+
+
+def test_add_requires_auth(client):
+    r = client.post("/api/hosts", json={"name": "x", "address": "1.2.3.4", "user": "root"})
+    assert r.status_code == 401
