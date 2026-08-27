@@ -1,0 +1,187 @@
+import React, { useEffect, useRef, useState } from 'react'
+import { api } from './api.js'
+import Terminal from './Terminal.jsx'
+import { leaf, splitLeaf, closeLeaf, setRatio, firstLeafId, layout } from './layout.js'
+
+let _ws = 1
+const newWorkspace = (spec) => {
+  const root = leaf(spec || { kind: 'local', title: 'local' })
+  return { id: 'ws' + (_ws++), name: 'Workspace ' + _ws, root, active: root.id }
+}
+
+export default function Workspace({ me, onLogout }) {
+  const [spaces, setSpaces] = useState(() => [newWorkspace()])
+  const [cur, setCur] = useState(0)
+  const [hosts, setHosts] = useState([])
+  const [adding, setAdding] = useState(false)
+  const stageRef = useRef(null)
+  const dragRef = useRef(null)   // { spaceIdx, splitId, dir }
+
+  const loadHosts = () => api('hosts').then((d) => setHosts(d.hosts || [])).catch(() => {})
+  useEffect(() => { loadHosts() }, [])
+
+  // ---- tree ops on the current workspace ----
+  const patch = (fn) => setSpaces((s) => s.map((w, i) => (i === cur ? fn(w) : w)))
+  const space = spaces[cur]
+
+  const openTerminal = (spec) => {
+    const nl = leaf(spec)
+    patch((w) => {
+      if (!w.root) return { ...w, root: nl, active: nl.id }
+      return { ...w, root: splitLeaf(w.root, w.active || firstLeafId(w.root), 'row', nl), active: nl.id }
+    })
+  }
+  const splitActive = (dir) => {
+    const nl = leaf(space.root ? specOf(space, space.active) : { kind: 'local', title: 'local' })
+    patch((w) => ({ ...w, root: splitLeaf(w.root, w.active, dir, nl), active: nl.id }))
+  }
+  const closeActive = () => patch((w) => {
+    const root = closeLeaf(w.root, w.active)
+    if (!root) { const nl = leaf({ kind: 'local', title: 'local' }); return { ...w, root: nl, active: nl.id } }
+    return { ...w, root, active: firstLeafId(root) }
+  })
+  const popOut = () => {
+    const sp = specOf(space, space.active)
+    if (!sp) return
+    const p = new URLSearchParams({ popout: '1', kind: sp.kind, title: sp.title || sp.host || 'local' })
+    if (sp.host) p.set('host', sp.host)
+    window.open('/?' + p.toString(), 'sysible_term_' + space.active, 'width=900,height=560')
+    closeActive()   // it now lives in the pop-out window
+  }
+
+  // ---- divider drag ----
+  const onDragStart = (e, splitId, dir) => {
+    e.preventDefault()
+    dragRef.current = { splitId, dir }
+    const move = (ev) => {
+      const d = dragRef.current, box = stageRef.current
+      if (!d || !box) return
+      const r = box.getBoundingClientRect()
+      const ratio = d.dir === 'row' ? (ev.clientX - r.left) / r.width : (ev.clientY - r.top) / r.height
+      // Ratio is measured against the whole stage; good enough because a split's rect
+      // spans the stage on its cross axis for top-level splits. Nested splits get a
+      // proportional feel; clamped in setRatio.
+      patch((w) => ({ ...w, root: setRatio(w.root, d.splitId, ratio) }))
+    }
+    const up = () => { dragRef.current = null; window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); document.body.style.cursor = '' }
+    document.body.style.cursor = dir === 'row' ? 'col-resize' : 'row-resize'
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
+
+  const addHost = async (form) => {
+    try { await api('hosts', { method: 'POST', json: form }); setAdding(false); loadHosts() }
+    catch (e) { alert(e.message) }
+  }
+  const delHost = async (name) => {
+    if (!confirm(`Remove host “${name}”?`)) return
+    try { await api(`hosts/${encodeURIComponent(name)}`, { method: 'DELETE' }); loadHosts() } catch (e) { alert(e.message) }
+  }
+  const logout = async () => { try { await api('logout', { method: 'POST' }) } catch { /* */ } onLogout() }
+
+  return (
+    <div className="connect-shell">
+      <aside className="side">
+        <div className="side-brand">Sysible <b>Connect</b></div>
+
+        <div className="side-sec">Terminals</div>
+        <button className="side-btn" onClick={() => openTerminal({ kind: 'local', title: 'local' })}>＋ Local shell</button>
+
+        <div className="side-sec">SSH hosts <button className="side-add" title="Add host" onClick={() => setAdding(true)}>＋</button></div>
+        {hosts.length === 0 && <div className="side-empty">No hosts yet.</div>}
+        {hosts.map((h) => (
+          <div key={h.name} className="side-host">
+            <button className="side-host-open" title={`SSH ${h.user}@${h.address}:${h.port}`}
+              onClick={() => openTerminal({ kind: 'ssh', host: h.name, title: h.name })}>
+              <span className="dot" /> {h.name}
+            </button>
+            <button className="side-host-del" title="Remove" onClick={() => delHost(h.name)}>✕</button>
+          </div>
+        ))}
+        {adding && <AddHost onCancel={() => setAdding(false)} onSave={addHost} />}
+
+        <div className="side-foot">
+          <span className="muted">{me.user}</span>
+          <button className="side-btn ghost" onClick={logout}>Sign out</button>
+        </div>
+      </aside>
+
+      <main className="main">
+        <div className="tabbar">
+          {spaces.map((w, i) => (
+            <button key={w.id} className={'tab' + (i === cur ? ' active' : '')}
+              onDoubleClick={() => { const n = prompt('Workspace name', w.name); if (n) setSpaces((s) => s.map((x, j) => (j === i ? { ...x, name: n } : x))) }}
+              onClick={() => setCur(i)}>{w.name}
+              {spaces.length > 1 && <span className="tab-x" onClick={(e) => { e.stopPropagation(); setSpaces((s) => s.filter((_, j) => j !== i)); setCur((c) => Math.max(0, c - (i <= c ? 1 : 0))) }}>✕</span>}
+            </button>
+          ))}
+          <button className="tab-add" title="New workspace" onClick={() => { setSpaces((s) => [...s, newWorkspace()]); setCur(spaces.length) }}>＋</button>
+          <div className="tab-tools">
+            <button className="tool" title="Split right" onClick={() => splitActive('row')}>⬌</button>
+            <button className="tool" title="Split down" onClick={() => splitActive('col')}>⬍</button>
+            <button className="tool" title="Pop out" onClick={popOut}>⇱</button>
+            <button className="tool danger" title="Close pane" onClick={closeActive}>✕</button>
+          </div>
+        </div>
+
+        <div className="stage" ref={stageRef}>
+          {/* Every workspace's terminals stay mounted (inactive ones hidden), so
+              switching tabs never drops a session. */}
+          {spaces.map((w, i) => {
+            const { tiles, dividers } = layout(w.root)
+            return (
+              <div key={w.id} className="ws-layer" style={{ display: i === cur ? 'block' : 'none' }}>
+                {tiles.map((t) => (
+                  <div key={t.id} className={'tile' + (t.id === w.active ? ' active' : '')}
+                    style={rectStyle(t.rect)} onMouseDown={() => patch((x) => ({ ...x, active: t.id }))}>
+                    <div className="tile-h">
+                      <span className="tile-title">{t.spec.kind === 'ssh' ? `⚡ ${t.spec.title}` : `▸ ${t.spec.title || 'local'}`}</span>
+                    </div>
+                    <div className="tile-body"><Terminal spec={t.spec} /></div>
+                  </div>
+                ))}
+                {dividers.map((d) => (
+                  <div key={d.id} className={'divider ' + d.dir} style={rectStyle(d.rect)}
+                    onMouseDown={(e) => onDragStart(e, d.id, d.dir)} />
+                ))}
+              </div>
+            )
+          })}
+        </div>
+      </main>
+    </div>
+  )
+}
+
+const rectStyle = (r) => ({ left: r.left + '%', top: r.top + '%', width: r.w + '%', height: r.h + '%' })
+
+// The spec of a leaf id in a workspace (walk the tree).
+function specOf(space, leafId) {
+  const walk = (n) => {
+    if (!n) return null
+    if (n.t === 'leaf') return n.id === leafId ? n.spec : null
+    return walk(n.a) || walk(n.b)
+  }
+  return walk(space.root)
+}
+
+function AddHost({ onCancel, onSave }) {
+  const [f, setF] = useState({ name: '', address: '', user: 'root', port: 22, password: '', key: '' })
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }))
+  return (
+    <div className="add-host">
+      <input placeholder="Name" value={f.name} onChange={(e) => set('name', e.target.value)} autoFocus />
+      <input placeholder="Address (host / IP)" value={f.address} onChange={(e) => set('address', e.target.value)} />
+      <div className="row">
+        <input placeholder="user" value={f.user} onChange={(e) => set('user', e.target.value)} />
+        <input placeholder="port" type="number" value={f.port} onChange={(e) => set('port', Number(e.target.value))} style={{ width: 70 }} />
+      </div>
+      <input placeholder="Password (optional)" type="password" value={f.password} onChange={(e) => set('password', e.target.value)} />
+      <textarea placeholder="Private key (optional, PEM)" rows={2} value={f.key} onChange={(e) => set('key', e.target.value)} />
+      <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <button className="side-btn ghost" onClick={onCancel}>Cancel</button>
+        <button className="side-btn" onClick={() => onSave(f)}>Add host</button>
+      </div>
+    </div>
+  )
+}

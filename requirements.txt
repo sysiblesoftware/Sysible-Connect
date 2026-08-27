@@ -1,0 +1,6 @@
+# Sysible Connect standalone runtime.
+fastapi==0.139.0
+uvicorn[standard]==0.50.2
+paramiko==5.0.0
+python-multipart==0.0.32
+websockets==15.0.1
