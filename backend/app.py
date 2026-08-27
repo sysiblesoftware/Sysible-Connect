@@ -15,7 +15,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from . import auth, controller, fleet, hosts, terminals
+from fastapi import File, Form, UploadFile
+
+from . import auth, controller, files, fleet, hosts, terminals
 
 COOKIE = "sysible_connect_session"
 _DIST = Path(__file__).resolve().parent.parent / "webgui" / "frontend" / "dist"
@@ -126,6 +128,40 @@ def add_host(body: dict = Body(...), user: str = Depends(current_user)):
 @app.delete("/api/hosts/{name}")
 def delete_host(name: str, user: str = Depends(current_user)):
     return {"deleted": hosts.delete_host(name)}
+
+
+# ------------------------------------------------------------- file transfer
+@app.post("/api/hosts/{name}/files/list")
+def files_list(name: str, body: dict = Body(default=None), user: str = Depends(current_user)):
+    try:
+        return files.list_dir(name, str((body or {}).get("path") or "."))
+    except files.FileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/hosts/{name}/files/download")
+def files_download(name: str, path: str, user: str = Depends(current_user)):
+    try:
+        data = files.download(name, path)
+    except files.FileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    fname = (path.rsplit("/", 1)[-1] or "download").replace('"', "")
+    return Response(content=data, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.post("/api/hosts/{name}/files/upload")
+async def files_upload(name: str, path: str = Form(...), file: UploadFile = File(...),
+                       user: str = Depends(current_user)):
+    dest = path if path.endswith("/") else path
+    # If a directory was given, append the uploaded filename.
+    if dest.endswith("/"):
+        dest = dest + (file.filename or "upload")
+    try:
+        size = files.upload(name, dest, await file.read())
+    except files.FileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "path": dest, "size": size}
 
 
 @app.post("/api/hosts/ping")

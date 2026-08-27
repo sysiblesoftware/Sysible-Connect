@@ -165,3 +165,9 @@ button.primary:disabled { opacity: .6; }
 .fleet-out { margin: 6px 0 0; padding: 8px 10px; background: #0b0f17; border: 1px solid var(--line);
   border-radius: 6px; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
   white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }
+
+/* ---------- files modal ---------- */
+.file-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.file-name { flex: 1; text-align: left; background: transparent; border: 0; color: var(--text);
+  cursor: pointer; font: inherit; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-name:hover { color: var(--accent); }

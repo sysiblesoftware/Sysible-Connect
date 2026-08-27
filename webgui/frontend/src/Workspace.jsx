@@ -22,6 +22,7 @@ export default function Workspace({ me, onLogout }) {
   const [ping, setPing] = useState({})        // host name -> {reachable, ms, detail}
   const [pinging, setPinging] = useState(false)
   const [fleet, setFleet] = useState(null)    // {label, loading} | {label, results}
+  const [filesFor, setFilesFor] = useState(null)   // host name whose Files modal is open
   const stageRef = useRef(null)
   const dragRef = useRef(null)   // { spaceIdx, splitId, dir }
 
@@ -178,6 +179,7 @@ export default function Workspace({ me, onLogout }) {
                     <span className={'dot' + dotClass(h)} /> {h.name}
                     {viaCtrl && <span className="host-badge">{h.transport === 'ssh' ? 'ssh' : 'agent'}</span>}
                   </button>
+                  {!viaCtrl && <button className="side-host-del" title="Files (SFTP)" onClick={() => setFilesFor(h.name)}>⌸</button>}
                   <button className="side-host-del" title="Remove" onClick={() => delHost(h.name)}>✕</button>
                 </div>
               )
@@ -245,6 +247,7 @@ export default function Workspace({ me, onLogout }) {
       </main>
 
       {fleet && <FleetResults data={fleet} onClose={() => setFleet(null)} />}
+      {filesFor && <FilesModal host={filesFor} onClose={() => setFilesFor(null)} />}
     </div>
   )
 }
@@ -259,6 +262,61 @@ function specOf(space, leafId) {
     return walk(n.a) || walk(n.b)
   }
   return walk(space.root)
+}
+
+function FilesModal({ host, onClose }) {
+  const [data, setData] = useState(null)   // {path, entries}
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const base = `hosts/${encodeURIComponent(host)}/files`
+  const load = async (p) => {
+    setBusy(true); setErr('')
+    try { const d = await api(`${base}/list`, { method: 'POST', json: { path: p } }); setData(d) }
+    catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  useEffect(() => { load('.') }, [])   // eslint-disable-line
+  const join = (name) => (data.path.replace(/\/$/, '') + '/' + name)
+  const up = () => load(data.path.replace(/\/[^/]+\/?$/, '') || '/')
+  const dl = (name) => window.open(`/api/${base}/download?path=${encodeURIComponent(join(name))}`, '_blank')
+  const upload = async (fileList) => {
+    const f = fileList && fileList[0]; if (!f) return
+    setBusy(true); setErr('')
+    try {
+      const fd = new FormData(); fd.append('file', f); fd.append('path', data.path.replace(/\/$/, '') + '/')
+      const res = await fetch(`/api/${base}/upload`, { method: 'POST', body: fd })
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText)
+      load(data.path)
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-h"><b>Files · {host}</b>
+          <button className="side-host-del" style={{ marginLeft: 'auto' }} onClick={onClose}>✕</button></div>
+        <div className="modal-body">
+          <div className="add-host .row" style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+            <button className="side-btn ghost sm" onClick={up} disabled={busy || !data}>↑ Up</button>
+            <code className="muted" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{data?.path || '…'}</code>
+            <label className="side-btn sm" style={{ cursor: 'pointer' }}>Upload
+              <input type="file" style={{ display: 'none' }} onChange={(e) => upload(e.target.files)} /></label>
+          </div>
+          {err && <div className="login-err">{err}</div>}
+          {busy && <div className="muted">…</div>}
+          {data?.entries?.map((e) => (
+            <div key={e.name} className="file-row">
+              <button className="file-name" onClick={() => e.dir ? load(join(e.name)) : dl(e.name)}>
+                {e.dir ? '📁' : '📄'} {e.name}</button>
+              {!e.dir && <>
+                <span className="muted" style={{ fontSize: 11 }}>{e.size}B</span>
+                <button className="side-btn ghost sm" title="Download" onClick={() => dl(e.name)}>⭳</button>
+              </>}
+            </div>
+          ))}
+          {data && !data.entries.length && <div className="muted">(empty)</div>}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function FleetResults({ data, onClose }) {
