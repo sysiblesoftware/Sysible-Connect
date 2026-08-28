@@ -28,7 +28,7 @@ def _fake_api(routes, *, record=None):
 
 # -------------------------------------------------------------- connect + sync
 def test_status_disconnected(auth_client):
-    assert auth_client.get("/api/controller").json() == {"connected": False, "base_url": ""}
+    assert auth_client.get("/api/controller").json() == {"connected": False, "base_url": "", "run_as": ""}
 
 
 def test_requires_auth(client):

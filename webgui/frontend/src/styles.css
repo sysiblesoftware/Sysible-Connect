@@ -230,6 +230,8 @@ a, .link { color: var(--accent2); }
 /* ---------- host groups + ping status ---------- */
 .side-envgroup { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
   color: var(--faint); margin: 8px 0 2px 4px; }
+.side-runas { font-size: 11px; color: var(--faint); margin: 1px 0 2px 16px; cursor: default; }
+.side-runas b { color: var(--muted); font-weight: 600; }
 .side-host-open .dot.up { background: var(--green); }
 .side-host-open .dot.down { background: var(--red); }
 

@@ -39,7 +39,9 @@ export default function Workspace({ me, onLogout }) {
   }
   const syncController = async () => {
     setSyncing(true)
-    try { const d = await api('controller/sync', { method: 'POST' }); loadHosts(); alert(`Synced ${d.imported} host(s) from the Controller (${d.agents} agent, ${d.ssh_hosts} SSH).`) }
+    try { const d = await api('controller/sync', { method: 'POST' }); loadHosts()
+      alert(`Synced ${d.imported} host(s) from the Controller (${d.agents} agent, ${d.ssh_hosts} SSH`
+        + (d.offline ? ` · ${d.online} online, ${d.offline} offline).` : ').')) }
     catch (e) { alert(e.message) } finally { setSyncing(false) }
   }
   const disconnectController = async () => {
@@ -137,7 +139,18 @@ export default function Workspace({ me, onLogout }) {
   const dotClass = (h) => {
     const p = ping[h.name]
     if (p) { if (p.reachable === true) return ' up'; if (p.reachable === false) return ' down' }
+    // Reflect the Controller's own liveness view for agent hosts synced from it.
+    if (h.online === true) return ' up'
+    if (h.online === false) return ' down'
     return h.source === 'controller' ? ' ctrl' : ''
+  }
+  const agoText = (sec) => {
+    if (!sec) return 'never'
+    const d = Math.max(0, Math.floor(Date.now() / 1000 - sec))
+    if (d < 60) return d + 's ago'
+    if (d < 3600) return Math.floor(d / 60) + 'm ago'
+    if (d < 86400) return Math.floor(d / 3600) + 'h ago'
+    return Math.floor(d / 86400) + 'd ago'
   }
 
   return (
@@ -154,10 +167,17 @@ export default function Workspace({ me, onLogout }) {
             : <button className="side-add" title="Connect a Controller" onClick={() => setCtrlForm(true)}>＋</button>}
         </div>
         {ctrl.connected
-          ? <div className="side-host">
-              <span className="side-host-open" title={ctrl.base_url}><span className="dot ok" /> {ctrl.base_url.replace(/^https?:\/\//, '')}</span>
-              <button className="side-host-del" title="Disconnect" onClick={disconnectController}>✕</button>
-            </div>
+          ? <>
+              <div className="side-host">
+                <span className="side-host-open" title={ctrl.base_url}><span className="dot ok" /> {ctrl.base_url.replace(/^https?:\/\//, '')}</span>
+                <button className="side-host-del" title="Disconnect" onClick={disconnectController}>✕</button>
+              </div>
+              <div className="side-runas" title={ctrl.run_as
+                ? `Terminals & commands run as “${ctrl.run_as}” on each host (that account + its sudo), and are attributed to it in the Controller's audit log.`
+                : 'Connected with an API key only — terminals run as the Controller’s default account. Reconnect with a username & password to run as your own account.'}>
+                {ctrl.run_as ? <>runs as <b>{ctrl.run_as}</b></> : 'API-key connect (no run-as)'}
+              </div>
+            </>
           : <div className="side-empty">Not connected.</div>}
         {ctrlForm && <ConnectController onCancel={() => setCtrlForm(false)} onSave={connectController} />}
 
@@ -175,9 +195,13 @@ export default function Workspace({ me, onLogout }) {
               const viaCtrl = h.source === 'controller'
               const kind = viaCtrl ? 'controller' : 'ssh'
               const p = ping[h.name]
+              const ctrlLive = viaCtrl && h.transport === 'agent' && h.online != null
+                ? (h.online ? ` — online (seen ${agoText(h.last_seen)})` : ` — OFFLINE (last seen ${agoText(h.last_seen)})`)
+                : ''
               const tip = (viaCtrl
                 ? `via Controller (${h.transport || 'agent'}${h.environment ? ' · ' + h.environment : ''})`
                 : `SSH ${h.user}@${h.address}:${h.port}`)
+                + ctrlLive
                 + (p ? ` — ${p.reachable === true ? p.ms + 'ms' : p.reachable === false ? 'unreachable' : p.detail || ''}` : '')
               return (
                 <div key={h.name} className="side-host">

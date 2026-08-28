@@ -71,6 +71,11 @@ def list_hosts() -> list[dict]:
             "source": h.get("source", "local"),
             "environment": h.get("environment", ""),
             "transport": h.get("transport", ""),
+            # Controller's own view of an agent host at last sync: True=online,
+            # False=offline (stale heartbeat), None=unknown/not applicable (SSH
+            # hosts, local hosts). last_seen is the epoch of its last heartbeat.
+            "online": h.get("online", None),
+            "last_seen": h.get("last_seen", 0),
         })
     return out
 
@@ -99,11 +104,13 @@ def add_host(name: str, address: str, user: str = "root", port: int = 22,
 
 
 def upsert_controller_host(name: str, address: str = "", user: str = "root", port: int = 22,
-                           environment: str = "", transport: str = "agent") -> None:
+                           environment: str = "", transport: str = "agent",
+                           online: bool | None = None, last_seen: float = 0) -> None:
     """Add/update a host synced from the connected Controller. Its terminal proxies
     THROUGH the Controller (by name), so a blank/NAT'd address is fine — we just skip
     an invalid one rather than fail the whole sync. Overwrites a prior sync of the
-    same name; carries no credentials (the Controller holds those)."""
+    same name; carries no credentials (the Controller holds those). `online`/`last_seen`
+    carry the Controller's liveness view so Connect can show offline hosts."""
     if not valid_name(name):
         raise ValueError("Invalid host name.")
     if address and not valid_host(address):
@@ -120,7 +127,8 @@ def upsert_controller_host(name: str, address: str = "", user: str = "root", por
         hosts = _load()
         hosts[name] = {"address": address, "user": user, "port": port,
                        "password": "", "key": "", "source": "controller",
-                       "environment": environment or "", "transport": transport or "agent"}
+                       "environment": environment or "", "transport": transport or "agent",
+                       "online": online, "last_seen": float(last_seen or 0)}
         _save(hosts)
 
 

@@ -21,6 +21,7 @@ import json
 import os
 import socket
 import ssl
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -50,6 +51,9 @@ def _load() -> dict:
     # plaintext api_key is tolerated and re-encrypted on the next save.
     if d.get("api_key_enc"):
         d["api_key"] = secret.decrypt(d.pop("api_key_enc"))
+    # The admin identity token (for run-as attribution) is stored encrypted too.
+    if d.get("admin_token_enc"):
+        d["admin_token"] = secret.decrypt(d.pop("admin_token_enc"))
     return d
 
 
@@ -59,6 +63,9 @@ def _save(cfg: dict) -> None:
     if out.get("api_key"):
         out["api_key_enc"] = secret.encrypt(out.pop("api_key"))
     out.pop("api_key", None)          # never write the key in plaintext
+    if out.get("admin_token"):
+        out["admin_token_enc"] = secret.encrypt(out.pop("admin_token"))
+    out.pop("admin_token", None)      # never write the identity token in plaintext
     fd = os.open(str(_CFG), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.write(fd, json.dumps(out).encode())
@@ -70,7 +77,11 @@ def status() -> dict:
     """Public connection state — never includes the API key."""
     cfg = _load()
     return {"connected": bool(cfg.get("base_url") and cfg.get("api_key")),
-            "base_url": cfg.get("base_url", "")}
+            "base_url": cfg.get("base_url", ""),
+            # When present, terminals/exec run AS this operator's account on the hosts
+            # (run-as attribution). Absent = api-key-only connect, so they run as the
+            # Controller's default account.
+            "run_as": cfg.get("admin_user", "")}
 
 
 def connect_with_credentials(base_url: str, username: str, password: str, totp_code: str = "") -> dict:
@@ -116,11 +127,39 @@ def connect_with_credentials(base_url: str, username: str, password: str, totp_c
     if not key:
         raise ControllerError("The Controller did not return an API key.")
     cfg = {"base_url": base, "api_key": str(key), "tls_cert": cert}
+    # Also mint an admin IDENTITY token for this operator via /admin/login, so the
+    # Controller runs terminals/exec as their own run-as account (attributed, sudo-
+    # constrained) instead of root. Best-effort: if it can't be obtained (older
+    # Controller, MFA, non-superuser), we still connect — terminals just fall back to
+    # the Controller's default account, exactly as before.
+    cfg["admin_token"] = _mint_admin_token(cfg, username, password, totp_code)
+    if cfg["admin_token"]:
+        cfg["admin_user"] = username    # who terminals/exec run as (shown in the UI)
     r = _request(cfg, "GET", "/remote/hosts")   # validate the exchanged key
     if r.status_code != 200:
         raise ControllerError(f"Connected, but /remote/hosts returned HTTP {r.status_code}.")
     _save(cfg)
     return status()
+
+
+def _mint_admin_token(cfg: dict, username: str, password: str, totp_code: str = "") -> str:
+    """Exchange the operator's console credentials for a Controller admin identity
+    token (POST /admin/login, which itself needs the API key we just got). The token
+    lets dispatch attribute and run tasks AS this operator's account. Returns "" on
+    any failure — run-as is a best-effort enhancement, never a connect blocker."""
+    payload = {"username": username, "password": password}
+    if totp_code:
+        payload["totp_code"] = totp_code
+    try:
+        r = _request(cfg, "POST", "/admin/login", json_body=payload, timeout=20)
+    except ControllerError:
+        return ""
+    if r.status_code != 200:
+        return ""
+    try:
+        return str(r.json().get("token") or "")
+    except ValueError:
+        return ""
 
 
 def disconnect() -> None:
@@ -189,6 +228,12 @@ def _request(cfg: dict, method: str, path: str, *, json_body=None, timeout=20):
     self-signed cert on a verify failure (pin it into cfg and retry once)."""
     url = cfg["base_url"] + path
     headers = {"X-API-Key": cfg["api_key"]}
+    # Attributed "run-as" identity: when we hold an admin token (username/password
+    # connect), send it so the Controller runs terminals/exec AS that operator's
+    # own account with their sudo — not as the SSH login user (root). Without it the
+    # Controller falls back to the tokenless root path.
+    if cfg.get("admin_token"):
+        headers["X-Sysible-Admin-Token"] = cfg["admin_token"]
     verify = _ca_path(cfg.get("tls_cert", "")) or True
     try:
         return requests.request(method, url, headers=headers, json=json_body,
@@ -251,8 +296,14 @@ def sync() -> dict:
     _save(cfg)   # persist a cert refreshed by TOFU during the calls
 
     imported = skipped = 0
+    online_n = offline_n = 0
+    # An agent is "offline" when its last heartbeat is older than this many seconds —
+    # matching the Controller's own health threshold (SYSIBLE_HEALTH_OFFLINE_S, default
+    # 300). Override on Connect with SYSIBLE_CONNECT_OFFLINE_S if needed.
+    now = time.time()
+    offline_after = int(os.getenv("SYSIBLE_CONNECT_OFFLINE_S") or 300)
 
-    def _imp(name, address, user, port, environment, transport):
+    def _imp(name, address, user, port, environment, transport, online=None, last_seen=0):
         nonlocal imported, skipped
         name = (name or "").strip()
         if not host_store.valid_name(name):
@@ -262,20 +313,32 @@ def sync() -> dict:
         # by NAME through the Controller and never dials the address directly.
         host_store.upsert_controller_host(
             name, address=address or "", user=user or "root", port=int(port or 22),
-            environment=environment or "", transport=transport)
+            environment=environment or "", transport=transport,
+            online=online, last_seen=last_seen)
         imported += 1
 
     for name, h in ssh_hosts.items():
         h = h or {}
+        # SSH hosts on the Controller are targets, not heartbeating agents — liveness
+        # is unknown here, so leave online=None (Connect can still TCP-ping them).
         _imp(name, str(h.get("ip", "")), str(h.get("user") or "root"),
              h.get("port", 22), str(h.get("environment", "")), "ssh")
     for a in agents:
         a = a or {}
+        if a.get("revoked"):
+            continue   # a revoked agent isn't a usable host — don't import it
+        last_seen = float(a.get("last_seen") or 0)
+        # online iff the Controller heard from it within the window; unknown if it has
+        # never reported (last_seen 0) — treat that as offline so it isn't shown green.
+        online = (now - last_seen) <= offline_after if last_seen else False
+        online_n += 1 if online else 0
+        offline_n += 0 if online else 1
         _imp(str(a.get("hostname", "")), str(a.get("ip", "")), "root", 22,
-             str(a.get("environment", "")), "agent")
+             str(a.get("environment", "")), "agent", online=online, last_seen=last_seen)
 
     return {"imported": imported, "skipped": skipped,
             "ssh_hosts": len(ssh_hosts), "agents": len(agents),
+            "online": online_n, "offline": offline_n,
             "controller": cfg["base_url"]}
 
 
