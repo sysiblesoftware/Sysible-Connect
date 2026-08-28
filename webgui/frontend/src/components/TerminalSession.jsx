@@ -61,12 +61,12 @@ const TerminalSession = forwardRef(function TerminalSession({ hostId, label, act
     };
     const bg = cssVar("--bg", "#17191d");
     const fg = cssVar("--text", "#e7e9ec");
-    const accent = cssVar("--accent", "#8c95cf");
+    const accent = cssVar("--accent", "#43a047");
     const term = new XTerm({
       fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
       fontSize: font,
       theme: { background: bg, foreground: fg, cursor: accent,
-               cursorAccent: bg, selectionBackground: "rgba(140,149,207,0.35)" },
+               cursorAccent: bg, selectionBackground: "rgba(67,160,71,0.35)" },
       cursorBlink: true,
     });
     let ready = false;

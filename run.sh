@@ -30,13 +30,23 @@ if [ "${SYSIBLE_CONNECT_NO_BOOTSTRAP:-0}" != "1" ]; then
 
   # Build the web console EVERY run so a `git pull` is reflected without stale
   # dist/ (npm ci only when node_modules is absent — that's the slow part).
+  # The dist/ is wiped first so a failed/absent build can NEVER serve an old UI:
+  # you either get the current commit's console or an obvious "not built" error,
+  # never last week's colours. (This is the fix for "I pulled but still see the
+  # old look" — a stale dist/ was being served.)
   if command -v npm >/dev/null 2>&1; then
-    echo "==> building the web console (npm)"
+    echo "==> building the web console (npm) from $(git rev-parse --short HEAD 2>/dev/null || echo '?')"
+    rm -rf webgui/frontend/dist
     ( cd webgui/frontend
       [ -d node_modules ] || npm ci --no-audit --no-fund
       npm run build )
+  elif [ -d webgui/frontend/dist ]; then
+    echo "WARNING: npm not found — serving the EXISTING webgui/frontend/dist, which may be" >&2
+    echo "         stale. Install Node.js/npm on this box and re-run to rebuild the UI." >&2
   else
-    echo "WARNING: npm not found — the browser UI won't be (re)built." >&2
+    echo "ERROR: npm not found AND no prebuilt webgui/frontend/dist — the browser UI" >&2
+    echo "       cannot be served. Install Node.js/npm and re-run." >&2
+    exit 1
   fi
 fi
 
