@@ -1,0 +1,14 @@
+# Keep the build context lean and reproducible: never copy host build output or
+# caches into the image. The web stage builds the SPA fresh (npm ci + npm run
+# build) and the runtime pulls dist from that stage, so none of these are needed
+# from the host — and copying a host node_modules/.venv in would bloat the image
+# and risk shipping stale or platform-mismatched artifacts.
+.git
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+**/*.pyc
+run/
+*.log
+.DS_Store
