@@ -149,6 +149,14 @@ a, .link { color: var(--accent2); }
 
 /* ---------- stage / tiles / dividers ---------- */
 .stage { position: relative; flex: 1; min-height: 0; background: var(--bg); }
+.stage.drag-over { outline: 2px dashed var(--accent); outline-offset: -8px; }
+.stage-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; z-index: 1; }
+.stage-empty-card { max-width: 380px; text-align: center; padding: 22px 26px;
+  border: 1px dashed var(--line-strong); border-radius: var(--r-lg); background: var(--panel); color: var(--muted); }
+.stage.drag-over .stage-empty-card { border-color: var(--accent); color: var(--text); }
+.stage-empty-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.stage-empty-sub { font-size: 13px; line-height: 1.5; }
+.stage-empty-sub b { color: var(--accent); font-weight: 600; }
 .ws-layer { position: absolute; inset: 0; }
 .tile { position: absolute; padding: 3px; display: flex; }
 .tile > * { pointer-events: auto; }

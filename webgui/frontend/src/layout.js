@@ -37,6 +37,7 @@ export function firstLeafId(node) { return isLeaf(node) ? node.id : firstLeafId(
 
 // Absolute rects (%) for every leaf + the draggable dividers, from a % rect.
 export function layout(node, rect = { left: 0, top: 0, w: 100, h: 100 }) {
+  if (!node) return { tiles: [], dividers: [] }   // empty workspace (nothing open yet)
   if (isLeaf(node)) return { tiles: [{ id: node.id, spec: node.spec, rect }], dividers: [] }
   const T = 0.5   // divider thickness in % (CSS pads the hit area)
   let aRect, bRect, div

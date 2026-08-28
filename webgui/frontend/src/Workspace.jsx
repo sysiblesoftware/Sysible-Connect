@@ -9,8 +9,10 @@ import { leaf, splitLeaf, closeLeaf, setRatio, firstLeafId, layout } from './lay
 let _ws = 0
 const newWorkspace = (spec) => {
   const n = ++_ws                    // 1, 2, 3 … (pre-increment: the first is "Workspace 1")
-  const root = leaf(spec || { kind: 'local', title: 'local' })
-  return { id: 'ws' + n, name: 'Workspace ' + n, root, active: root.id }
+  // A workspace opens BLANK — no automatic local terminal. Drag a host onto it (or
+  // use ＋ Local shell) to open one. Pass a spec only to seed one deliberately.
+  const root = spec ? leaf(spec) : null
+  return { id: 'ws' + n, name: 'Workspace ' + n, root, active: root ? root.id : null }
 }
 
 export default function Workspace({ me, onLogout }) {
@@ -61,16 +63,40 @@ export default function Workspace({ me, onLogout }) {
     })
   }
   const splitActive = (dir) => {
-    const nl = leaf(space.root ? specOf(space, space.active) : { kind: 'local', title: 'local' })
+    if (!space.root) { openTerminal({ kind: 'local', title: 'local' }); return }
+    const nl = leaf(specOf(space, space.active) || { kind: 'local', title: 'local' })
     patch((w) => ({ ...w, root: splitLeaf(w.root, w.active, dir, nl), active: nl.id }))
   }
-  const closeActive = () => closeTile(space.active)
-  // Close a specific pane by id (used by each terminal's own close button). If it
-  // was the last pane, the workspace keeps a fresh local shell so the stage is
-  // never empty; to leave entirely, close the workspace tab or Sign out.
+
+  // ---- drag a host from the sidebar onto the stage to open its terminal ----
+  const DND_TYPE = 'application/x-sysible-host'
+  const [dragOver, setDragOver] = useState(false)
+  const onHostDragStart = (e, spec) => {
+    try {
+      e.dataTransfer.setData(DND_TYPE, JSON.stringify(spec))
+      e.dataTransfer.setData('text/plain', spec.host || spec.title || 'terminal')
+      e.dataTransfer.effectAllowed = 'copy'
+    } catch { /* dnd unavailable */ }
+  }
+  const onStageDragOver = (e) => {
+    if (Array.from(e.dataTransfer.types || []).includes(DND_TYPE)) {
+      e.preventDefault(); e.dataTransfer.dropEffect = 'copy'
+      if (!dragOver) setDragOver(true)
+    }
+  }
+  const onStageDrop = (e) => {
+    e.preventDefault(); setDragOver(false)
+    try {
+      const spec = JSON.parse(e.dataTransfer.getData(DND_TYPE))
+      if (spec && (spec.kind === 'local' || spec.host)) openTerminal(spec)
+    } catch { /* not a host drag */ }
+  }
+  const closeActive = () => space.active && closeTile(space.active)
+  // Close a specific pane by id. Closing the last pane leaves the workspace BLANK
+  // (drag a host on to open another), rather than respawning a local shell.
   const closeTile = (id) => patch((w) => {
     const root = closeLeaf(w.root, id)
-    if (!root) { const nl = leaf({ kind: 'local', title: 'local' }); return { ...w, root: nl, active: nl.id } }
+    if (!root) return { ...w, root: null, active: null }
     return { ...w, root, active: (w.active === id ? firstLeafId(root) : w.active) }
   })
   const popOut = () => {
@@ -159,7 +185,9 @@ export default function Workspace({ me, onLogout }) {
         <div className="side-brand"><Logo size={22} /> <span>Sysible <b>Connect</b></span></div>
 
         <div className="side-sec">Terminals</div>
-        <button className="side-btn" onClick={() => openTerminal({ kind: 'local', title: 'local' })}>＋ Local shell</button>
+        <button className="side-btn" draggable
+          onDragStart={(e) => onHostDragStart(e, { kind: 'local', title: 'local' })}
+          onClick={() => openTerminal({ kind: 'local', title: 'local' })}>＋ Local shell</button>
 
         <div className="side-sec">Controller
           {ctrl.connected
@@ -205,7 +233,8 @@ export default function Workspace({ me, onLogout }) {
                 + (p ? ` — ${p.reachable === true ? p.ms + 'ms' : p.reachable === false ? 'unreachable' : p.detail || ''}` : '')
               return (
                 <div key={h.name} className="side-host">
-                  <button className="side-host-open" title={tip}
+                  <button className="side-host-open" title={tip + ' — click or drag onto a workspace to open'} draggable
+                    onDragStart={(e) => onHostDragStart(e, { kind, host: h.name, title: h.name })}
                     onClick={() => openTerminal({ kind, host: h.name, title: h.name })}>
                     <span className={'dot' + dotClass(h)} /> {h.name}
                     {viaCtrl && <span className="host-badge">{h.transport === 'ssh' ? 'ssh' : 'agent'}</span>}
@@ -259,7 +288,16 @@ export default function Workspace({ me, onLogout }) {
           </div>
         </div>
 
-        <div className="stage" ref={stageRef}>
+        <div className={'stage' + (dragOver ? ' drag-over' : '')} ref={stageRef}
+          onDragOver={onStageDragOver} onDragLeave={() => setDragOver(false)} onDrop={onStageDrop}>
+          {!space.root && (
+            <div className="stage-empty">
+              <div className="stage-empty-card">
+                <div className="stage-empty-title">Empty workspace</div>
+                <div className="stage-empty-sub">Drag a host from the sidebar here to open its terminal — or use <b>＋ Local shell</b>.</div>
+              </div>
+            </div>
+          )}
           {/* Every workspace's terminals stay mounted (inactive ones hidden), so
               switching tabs never drops a session. */}
           {spaces.map((w, i) => {
