@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
 import Terminal from './Terminal.jsx'
 import Logo from './Logo.jsx'
+import { IconSplitRight, IconSplitDown, IconPopout, IconClose, IconSave } from './icons.jsx'
 import { leaf, splitLeaf, closeLeaf, setRatio, firstLeafId, layout } from './layout.js'
 
 let _ws = 0
@@ -59,10 +60,14 @@ export default function Workspace({ me, onLogout }) {
     const nl = leaf(space.root ? specOf(space, space.active) : { kind: 'local', title: 'local' })
     patch((w) => ({ ...w, root: splitLeaf(w.root, w.active, dir, nl), active: nl.id }))
   }
-  const closeActive = () => patch((w) => {
-    const root = closeLeaf(w.root, w.active)
+  const closeActive = () => closeTile(space.active)
+  // Close a specific pane by id (used by each terminal's own close button). If it
+  // was the last pane, the workspace keeps a fresh local shell so the stage is
+  // never empty; to leave entirely, close the workspace tab or Sign out.
+  const closeTile = (id) => patch((w) => {
+    const root = closeLeaf(w.root, id)
     if (!root) { const nl = leaf({ kind: 'local', title: 'local' }); return { ...w, root: nl, active: nl.id } }
-    return { ...w, root, active: firstLeafId(root) }
+    return { ...w, root, active: (w.active === id ? firstLeafId(root) : w.active) }
   })
   const popOut = () => {
     const sp = specOf(space, space.active)
@@ -213,10 +218,10 @@ export default function Workspace({ me, onLogout }) {
           ))}
           <button className="tab-add" title="New workspace" onClick={() => { setSpaces((s) => [...s, newWorkspace()]); setCur(spaces.length) }}>＋</button>
           <div className="tab-tools">
-            <button className="tool" title="Split right — new pane beside this one" onClick={() => splitActive('row')}>◫</button>
-            <button className="tool" title="Split down — new pane below this one" onClick={() => splitActive('col')}>⊟</button>
-            <button className="tool" title="Pop out" onClick={popOut}>⇱</button>
-            <button className="tool danger" title="Close pane" onClick={closeActive}>✕</button>
+            <button className="tool" title="Split right — new pane beside this one" aria-label="Split right" onClick={() => splitActive('row')}><IconSplitRight /></button>
+            <button className="tool" title="Split down — new pane below this one" aria-label="Split down" onClick={() => splitActive('col')}><IconSplitDown /></button>
+            <button className="tool" title="Pop out into its own window" aria-label="Pop out" onClick={popOut}><IconPopout /></button>
+            <button className="tool danger" title="Close the active pane" aria-label="Close pane" onClick={closeActive}><IconClose /></button>
           </div>
         </div>
 
@@ -232,8 +237,10 @@ export default function Workspace({ me, onLogout }) {
                     style={rectStyle(t.rect)} onMouseDown={() => patch((x) => ({ ...x, active: t.id }))}>
                     <div className="tile-h">
                       <span className="tile-title">{t.spec.kind === 'ssh' ? `⚡ ${t.spec.title}` : `▸ ${t.spec.title || 'local'}`}</span>
+                      <button className="tile-x" title="Close this terminal" aria-label="Close this terminal"
+                        onClick={(e) => { e.stopPropagation(); closeTile(t.id) }}><IconClose /></button>
                     </div>
-                    <div className="tile-body"><Terminal spec={t.spec} /></div>
+                    <div className="tile-body"><Terminal spec={t.spec} onClose={() => closeTile(t.id)} /></div>
                   </div>
                 ))}
                 {dividers.map((d) => (
@@ -308,7 +315,7 @@ function FilesModal({ host, onClose }) {
                 {e.dir ? '📁' : '📄'} {e.name}</button>
               {!e.dir && <>
                 <span className="muted" style={{ fontSize: 11 }}>{e.size}B</span>
-                <button className="side-btn ghost sm" title="Download" onClick={() => dl(e.name)}>⭳</button>
+                <button className="side-btn ghost sm" title="Download" aria-label="Download" onClick={() => dl(e.name)}><IconSave /></button>
               </>}
             </div>
           ))}

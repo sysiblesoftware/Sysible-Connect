@@ -97,7 +97,9 @@ a, .link { color: var(--accent2); }
 .tab-x:hover { color: var(--red); }
 .tab-add { background: transparent; border: 1px solid var(--line); color: var(--text); border-radius: 8px; cursor: pointer; padding: 6px 10px; }
 .tab-tools { margin-left: auto; display: flex; gap: 4px; }
-.tool { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 7px; cursor: pointer; padding: 5px 9px; font-size: 14px; }
+.tool { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 28px;
+  background: var(--panel2); border: 1px solid var(--line); color: var(--muted); border-radius: 7px; cursor: pointer; padding: 0; }
+.tool:hover { color: var(--text); border-color: var(--accent); }
 .tool.danger:hover { color: var(--red); border-color: var(--red); }
 
 /* ---------- stage / tiles / dividers ---------- */
@@ -151,15 +153,34 @@ a, .link { color: var(--accent2); }
 
 /* ---------- per-terminal toolbar ---------- */
 .term-wrap { display: flex; flex-direction: column; height: 100%; }
-.term-tools { display: flex; align-items: center; gap: 4px; padding: 3px 6px;
+.term-tools { display: flex; align-items: center; gap: 3px; padding: 4px 6px;
   background: var(--panel); border-bottom: 1px solid var(--line); }
-.term-tools button { background: var(--panel2); border: 1px solid var(--line);
-  color: var(--muted); border-radius: 5px; cursor: pointer; font-size: 11px; padding: 2px 7px; }
-.term-tools button:hover, .term-tools button.on { color: var(--text); border-color: var(--accent); }
+/* text keys (Ctrl-C, A−, A+, ↑, ↓) */
+.term-tools .tt-key { background: var(--panel2); border: 1px solid var(--line);
+  color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 11px;
+  font-weight: 500; line-height: 1; padding: 4px 8px; letter-spacing: .02em; }
+/* icon buttons (find, save, close) — square, SVG centred */
+.term-tools .tt-icon { display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 24px; padding: 0; background: var(--panel2);
+  border: 1px solid var(--line); color: var(--muted); border-radius: 6px; cursor: pointer; }
+.term-tools .tt-key:hover, .term-tools .tt-icon:hover, .term-tools .tt-icon.on {
+  color: var(--text); border-color: var(--accent); }
+/* thin separator between key groups */
+.term-tools .tt-sep { width: 1px; height: 16px; background: var(--line); margin: 0 3px; }
+/* close sits at the far right, turns red on hover */
+.term-tools .tt-close { margin-left: auto; }
+.term-tools .tt-close:hover { color: var(--red); border-color: var(--red); }
 .term-find { display: inline-flex; align-items: center; gap: 3px; margin-left: 4px; }
 .term-find input { background: var(--panel2); border: 1px solid var(--line); color: var(--text);
-  border-radius: 5px; padding: 2px 6px; font: inherit; font-size: 11px; width: 120px; }
+  border-radius: 6px; padding: 3px 7px; font: inherit; font-size: 11px; width: 120px; }
 .term-wrap .term { flex: 1; min-height: 0; width: 100%; padding: 4px 2px 2px 6px; }
+
+/* per-pane close in the tile header */
+.tile-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-x { display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 18px; padding: 0; background: transparent; border: 0;
+  color: var(--muted); border-radius: 4px; cursor: pointer; }
+.tile-x:hover { color: var(--red); background: var(--panel2); }
 
 /* ---------- host groups + ping status ---------- */
 .side-envgroup { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;

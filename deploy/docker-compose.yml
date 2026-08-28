@@ -1,0 +1,39 @@
+# Sysible Connect — the fleet terminal workspace.
+#
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#   open https://localhost:8700
+#
+# On first start an admin account is seeded. Set SYSIBLE_CONNECT_PASSWORD below to
+# choose it; otherwise a random one is generated and printed once to the logs
+# (docker compose -f deploy/docker-compose.yml logs | grep 'first-run admin').
+# You'll be asked to change a generated password on first login.
+#
+# The console is served over HTTPS with a self-signed cert by default (so the
+# browser terminal is a secure context and traffic is encrypted). Your browser
+# shows a one-time trust warning — expected; proceed once. Set
+# SYSIBLE_CONNECT_TLS_HOSTS to your server's IP/hostname to put it in the cert
+# and remove the name-mismatch warning. For a warning-free cert, set
+# SYSIBLE_CONNECT_TLS=0 and terminate TLS at a reverse proxy with a real cert.
+#
+# One service, one volume. Login, host inventory, the encrypted Controller link
+# and the per-install secret key persist in the named `connect-data` volume.
+services:
+  connect:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: sysible-connect:latest
+    container_name: sysible-connect
+    ports:
+      - "8700:8700"                 # the web console (API + SPA) over HTTPS
+    volumes:
+      - connect-data:/data
+    environment:
+      SYSIBLE_CONNECT_DATA: /data
+      SYSIBLE_CONNECT_TLS: "1"                          # "0" to serve plain HTTP (behind a proxy)
+      SYSIBLE_CONNECT_TLS_HOSTS: ${SYSIBLE_CONNECT_TLS_HOSTS:-}  # e.g. 192.168.8.249,connect.lan
+      # SYSIBLE_CONNECT_PASSWORD: change-me            # uncomment to set the admin password
+    restart: unless-stopped
+
+volumes:
+  connect-data:

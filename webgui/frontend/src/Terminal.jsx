@@ -3,13 +3,14 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { terminalWsUrl } from './api.js'
+import { IconSearch, IconSave, IconClose } from './icons.jsx'
 
 // One independent terminal: its own xterm + websocket to a local shell, an SSH
 // host, or a Controller-proxied host. Kept mounted across layout changes (the
 // workspace positions tiles by CSS, never remounts them), so a split/resize/tab-
-// switch never drops the session. Carries its own toolbar: Ctrl+C, font size,
-// find-in-output, and save-output.
-const Terminal = forwardRef(function Terminal({ spec, onStatus }, ref) {
+// switch never drops the session. Carries its own toolbar: Ctrl-C, font size,
+// find-in-output, save-output, and a close button for this pane.
+const Terminal = forwardRef(function Terminal({ spec, onStatus, onClose }, ref) {
   const elRef = useRef(null)
   const termRef = useRef(null)
   const fitRef = useRef(null)
@@ -92,19 +93,28 @@ const Terminal = forwardRef(function Terminal({ spec, onStatus }, ref) {
   return (
     <div className="term-wrap">
       <div className="term-tools">
-        <button title="Send Ctrl+C" onClick={() => { sendInput('\x03'); termRef.current?.focus() }}>^C</button>
-        <button title="Smaller font" onClick={() => bumpFont(-1)}>A−</button>
-        <button title="Larger font" onClick={() => bumpFont(1)}>A+</button>
-        <button title="Find in output" className={findOpen ? 'on' : ''} onClick={() => setFindOpen((v) => !v)}>⌕</button>
-        <button title="Save output to a file" onClick={saveOutput}>⭳</button>
+        <button className="tt-key" title="Send Ctrl-C (interrupt the running command)"
+          onClick={() => { sendInput('\x03'); termRef.current?.focus() }}>Ctrl-C</button>
+        <span className="tt-sep" />
+        <button className="tt-key" title="Smaller font" onClick={() => bumpFont(-1)}>A−</button>
+        <button className="tt-key" title="Larger font" onClick={() => bumpFont(1)}>A+</button>
+        <span className="tt-sep" />
+        <button title="Find in output" aria-label="Find in output"
+          className={'tt-icon' + (findOpen ? ' on' : '')} onClick={() => setFindOpen((v) => !v)}><IconSearch /></button>
+        <button className="tt-icon" title="Save output to a file" aria-label="Save output to a file"
+          onClick={saveOutput}><IconSave /></button>
         {findOpen && (
           <span className="term-find">
             <input autoFocus placeholder="find…" value={findQ}
               onChange={(e) => setFindQ(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') find(e.shiftKey); if (e.key === 'Escape') setFindOpen(false) }} />
-            <button title="Previous" onClick={() => find(true)}>↑</button>
-            <button title="Next" onClick={() => find(false)}>↓</button>
+            <button className="tt-key" title="Previous" onClick={() => find(true)}>↑</button>
+            <button className="tt-key" title="Next" onClick={() => find(false)}>↓</button>
           </span>
+        )}
+        {onClose && (
+          <button className="tt-icon tt-close" title="Close this terminal" aria-label="Close this terminal"
+            onClick={onClose}><IconClose /></button>
         )}
       </div>
       <div className="term" ref={elRef} onClick={() => termRef.current?.focus()} />

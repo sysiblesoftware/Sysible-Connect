@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Sysible Connect">
+  <defs>
+    <linearGradient id="cn-tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161d29"/>
+      <stop offset="1" stop-color="#0a0d13"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="116" height="116" rx="28" ry="28" fill="url(#cn-tile)"/>
+  <rect x="8.5" y="8.5" width="111" height="111" rx="25.5" ry="25.5" fill="none" stroke="#6ddb73" stroke-width="4"/>
+  <path d="M40 44 L64 64 L40 84" fill="none" stroke="#6ddb73" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="72" y="74" width="20" height="10" rx="2" fill="#7aa2ff"/>
+</svg>
