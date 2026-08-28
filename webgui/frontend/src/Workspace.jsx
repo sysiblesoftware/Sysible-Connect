@@ -221,7 +221,6 @@ export default function Workspace({ me, onLogout }) {
             <button className="tool" title="Split right — new pane beside this one" aria-label="Split right" onClick={() => splitActive('row')}><IconSplitRight /></button>
             <button className="tool" title="Split down — new pane below this one" aria-label="Split down" onClick={() => splitActive('col')}><IconSplitDown /></button>
             <button className="tool" title="Pop out into its own window" aria-label="Pop out" onClick={popOut}><IconPopout /></button>
-            <button className="tool danger" title="Close the active pane" aria-label="Close pane" onClick={closeActive}><IconClose /></button>
           </div>
         </div>
 
@@ -240,7 +239,7 @@ export default function Workspace({ me, onLogout }) {
                       <button className="tile-x" title="Close this terminal" aria-label="Close this terminal"
                         onClick={(e) => { e.stopPropagation(); closeTile(t.id) }}><IconClose /></button>
                     </div>
-                    <div className="tile-body"><Terminal spec={t.spec} onClose={() => closeTile(t.id)} /></div>
+                    <div className="tile-body"><Terminal spec={t.spec} /></div>
                   </div>
                 ))}
                 {dividers.map((d) => (

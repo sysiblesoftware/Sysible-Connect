@@ -3,14 +3,14 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { terminalWsUrl } from './api.js'
-import { IconSearch, IconSave, IconClose } from './icons.jsx'
+import { IconSearch, IconSave } from './icons.jsx'
 
 // One independent terminal: its own xterm + websocket to a local shell, an SSH
 // host, or a Controller-proxied host. Kept mounted across layout changes (the
 // workspace positions tiles by CSS, never remounts them), so a split/resize/tab-
 // switch never drops the session. Carries its own toolbar: Ctrl-C, font size,
-// find-in-output, save-output, and a close button for this pane.
-const Terminal = forwardRef(function Terminal({ spec, onStatus, onClose }, ref) {
+// find-in-output, and save-output. (Closing the pane is the ✕ in the tile header.)
+const Terminal = forwardRef(function Terminal({ spec, onStatus }, ref) {
   const elRef = useRef(null)
   const termRef = useRef(null)
   const fitRef = useRef(null)
@@ -111,10 +111,6 @@ const Terminal = forwardRef(function Terminal({ spec, onStatus, onClose }, ref) 
             <button className="tt-key" title="Previous" onClick={() => find(true)}>↑</button>
             <button className="tt-key" title="Next" onClick={() => find(false)}>↓</button>
           </span>
-        )}
-        {onClose && (
-          <button className="tt-icon tt-close" title="Close this terminal" aria-label="Close this terminal"
-            onClick={onClose}><IconClose /></button>
         )}
       </div>
       <div className="term" ref={elRef} onClick={() => termRef.current?.focus()} />
