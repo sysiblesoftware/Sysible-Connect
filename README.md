@@ -1,50 +1,58 @@
 # Sysible Connect
 
-**Status: local prep scaffold (not yet a running service).** Staged for extraction
-from `Sysible-Controller` as part of the SLOP (Sysible Linux Operations Platform)
-split. Nothing here is wired up yet — this repo is a starting point plus the plan
-to finish the cut. See `docs/EXTRACTION_PLAN.md`.
+The fleet **terminal workspace** for the Sysible suite: a self-contained web app
+that gives you browser terminals, an SSH-host inventory, file transfer, and
+fleet actions across every host — on its own or wired to a Sysible Controller.
 
-## What Sysible Connect is
+## What it does
 
-The **SSH / terminal / file-transfer** side of host management — as opposed to the
-Controller's core **agent-based** fleet management. Concretely:
+- **Browser terminals** (xterm.js → websocket → PTY) to a local shell, a
+  directly-added SSH host, or a Controller-managed host (proxied through the
+  Controller, so it works even for NAT'd agents with no inbound SSH).
+- **Drag-to-open workspaces** — split panes, multiple workspaces, pop-out windows.
+- **Host inventory** — add SSH hosts directly, or **sync the fleet from a
+  Controller** (agents + SSH hosts), with online/offline status.
+- **Run-as** — connect to the Controller with a username & password and terminals
+  run as that operator's account (their sudo), attributed in the Controller audit
+  log, instead of root.
+- **Fleet actions** — run a command across every host; restart agents; reboot /
+  power off (guarded).
+- **File transfer** — SFTP upload/download for directly-added SSH hosts.
+- **Light / dark** theme, HTTPS by default, session-cookie auth with a login
+  throttle, and secrets encrypted at rest.
 
-- The **managed-SSH-host store** (`hosts.json`) + the shared controller keypair.
-- **Password enrollment** of a host over SSH (`/enroll-ssh`).
-- **Ad-hoc remote exec** on an SSH host.
-- **Interactive terminals** (xterm.js in the browser → websocket → PTY).
-- **SFTP file upload/download** to/from a host.
-- The **Connect** web page (host tree, terminal pop-out, fleet actions, file transfer).
+## Run it
 
-## What's in this scaffold
+**Dev (from a checkout):**
+```bash
+./run.sh            # venv + deps + build the SPA + serve HTTPS on :8700
+```
+The first-run admin password is printed once in the console output.
 
-| Path | Origin | Notes |
-|---|---|---|
-| `backend/remote_routes.py` | Controller | The whole `/remote` router. Moves wholesale, but the Controller core imports ~9 helper symbols from it — those become an API boundary (see plan §3). |
-| `backend/models/remote_models.py` | Controller | Pydantic models for the `/remote` routes. Connect-only. |
-| `webgui/frontend/src/views/Connect.jsx` | Controller | The Connect page. |
-| `webgui/frontend/src/components/{FileTransfer,StandaloneTerminal,TerminalSession}.jsx` | Controller | Connect-only UI. |
-| `webgui/frontend/src/components/HostResults.jsx` | Controller | **Shared** (6 views use it in the Controller) — copied here to be *duplicated*, not moved. |
-| `tests/test_ssh_host_{delete,injection}.py` | Controller | Connect-only tests. |
+**Container:**
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build
+# open https://localhost:8700   (admin password is printed once in the logs)
+```
+Or manage it with the suite CLI (from the Controller checkout):
+`sysible_ctl connect update | logs | status | …`.
 
-## The one hard problem (read before starting)
+State (login, host inventory, the encrypted Controller link, the per-install
+secret key, the TLS cert) lives in `~/.sysible-connect` for the dev runner, or the
+`connect-data` volume for the container.
 
-Connect's terminal has **two** transports:
+## Layout
 
-- **Pure-SSH hosts** — paramiko, fully self-contained. Standalone Connect can own this.
-- **Agent hosts** — the terminal is **co-owned by the Controller core and the agent**:
-  the agent runs the PTY and posts frames to the Controller (`/agents/{id}/pty/*`,
-  authenticated by the per-host agent secret), and the browser websocket reads them
-  from shared in-process buffers. This is **not** a file move — it needs an API/relay
-  boundary. The `docs/EXTRACTION_PLAN.md` lays out the options.
+| Path | What |
+|---|---|
+| `backend/` | FastAPI app: `app` (routes + terminal websocket), `auth`, `hosts`, `controller` (sync + terminal proxy + run-as), `terminals`, `fleet`, `files`, `secret`. |
+| `webgui/frontend/` | React/Vite SPA: the workspace, login, and the xterm terminal. |
+| `run.sh` | Self-bootstrapping dev runner (venv, SPA build, self-signed TLS, uvicorn). |
+| `deploy/` | `Dockerfile`, `docker-compose.yml`, `entrypoint.sh` for the container. |
+| `docs/SECURITY_REVIEW.md` | Cross-service (Controller ⇄ SLEP ⇄ Connect) trust-boundary review. |
 
-## Next (tomorrow)
+## Tests
 
-1. Duplicate the shared bits (`HostResults`, SSH-input validators).
-2. Stand this up against a Controller API for auth + the host list.
-3. Decide agent-terminal ownership and wire the PTY relay.
-4. Remove Connect's wiring from the Controller CE/EE (exact spots in the plan).
-5. Split/migrate the tests.
-
-Until step 4 runs, **the Controller (CE/EE) is unchanged** — this repo only stages the move.
+```bash
+pytest
+```
