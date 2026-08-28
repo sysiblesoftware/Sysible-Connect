@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
 import Terminal from './Terminal.jsx'
 import Logo from './Logo.jsx'
-import { IconSplitRight, IconSplitDown, IconPopout, IconClose, IconSave } from './icons.jsx'
+import { IconSplitRight, IconSplitDown, IconPopout, IconClose, IconSave, IconSun, IconMoon } from './icons.jsx'
+import { getTheme, toggleTheme } from './theme.js'
 import { leaf, splitLeaf, closeLeaf, setRatio, firstLeafId, layout } from './layout.js'
 
 let _ws = 0
@@ -24,6 +25,7 @@ export default function Workspace({ me, onLogout }) {
   const [pinging, setPinging] = useState(false)
   const [fleet, setFleet] = useState(null)    // {label, loading} | {label, results}
   const [filesFor, setFilesFor] = useState(null)   // host name whose Files modal is open
+  const [theme, setTheme] = useState(getTheme())
   const stageRef = useRef(null)
   const dragRef = useRef(null)   // { spaceIdx, splitId, dir }
 
@@ -194,16 +196,25 @@ export default function Workspace({ me, onLogout }) {
         {adding && <AddHost onCancel={() => setAdding(false)} onSave={addHost} />}
 
         {hosts.length > 0 && <>
-          <div className="side-sec">Fleet actions</div>
-          <button className="side-btn ghost sm" onClick={runScriptAll}>Run script on all…</button>
-          <button className="side-btn ghost sm" onClick={restartAgentAll}>Restart agent on all</button>
-          <button className="side-btn ghost sm danger" onClick={() => dangerAll('REBOOT', 'sudo reboot', 'reboot')}>Reboot all</button>
-          <button className="side-btn ghost sm danger" onClick={() => dangerAll('POWEROFF', 'sudo poweroff', 'power off')}>Power off all</button>
+          <div className="side-sec">Fleet actions <span className="side-sec-count">{hosts.length}</span></div>
+          <div className="fleet-group">
+            <button className="fleet-btn" onClick={runScriptAll}>Run script on all…</button>
+            <button className="fleet-btn" onClick={restartAgentAll}>Restart agent on all</button>
+            <div className="fleet-sep">Destructive</div>
+            <button className="fleet-btn danger" onClick={() => dangerAll('REBOOT', 'sudo reboot', 'reboot')}>Reboot all</button>
+            <button className="fleet-btn danger" onClick={() => dangerAll('POWEROFF', 'sudo poweroff', 'power off')}>Power off all</button>
+          </div>
         </>}
 
         <div className="side-foot">
           <span className="muted">{me.user}</span>
-          <button className="side-btn ghost" onClick={logout}>Sign out</button>
+          <div className="side-foot-actions">
+            <button className="icon-btn" title={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'}
+              aria-label="Toggle theme" onClick={() => setTheme(toggleTheme())}>
+              {theme === 'light' ? <IconMoon /> : <IconSun />}
+            </button>
+            <button className="side-btn ghost" onClick={logout}>Sign out</button>
+          </div>
         </div>
       </aside>
 

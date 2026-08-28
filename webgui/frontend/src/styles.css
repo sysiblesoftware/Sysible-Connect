@@ -1,14 +1,48 @@
+/* The Sysible suite skin — one family across SLEP / Controller / Connect: an
+   engineering ground, brand GREEN as the primary accent, brand blue for links.
+   Both light and dark palettes are defined as tokens; dark is the default and
+   the app follows the OS preference until the viewer picks a theme (theme.js
+   stamps data-theme on <html>). Terminals stay dark in both themes on purpose. */
 :root {
-  /* The Sysible suite "brand" skin — identical tokens to SLEP / Controller so the
-     three products feel like one: near-black engineering ground, brand GREEN as the
-     primary accent, brand blue for links, over a topographic contour overlay. */
   color-scheme: dark;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --bg: #0d1117; --panel: #12161f; --panel2: #161b26; --line: #232b3a; --line-strong: #33405a;
-  --text: #e9f0f7; --muted: #9aa7bd; --faint: #7d8ca3;
-  --accent: #43a047;      /* brand green — primary actions */
-  --accent2: #5580ee;     /* brand blue — links, active */
-  --green: #63c869; --red: #e5534b;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --bg: #0d1117; --panel: #131923; --panel2: #1a212d; --line: #26303f; --line-strong: #33405a;
+  --text: #e6edf5; --muted: #93a1b5; --faint: #6f7d92;
+  --accent: #46a04a;       /* brand green — primary actions */
+  --accent-ink: #06210c;   /* text on a green fill */
+  --accent2: #5b86f0;      /* brand blue — links, active */
+  --green: #4caf5a; --red: #e5534b;
+  --term-bg: #0b0f17;      /* terminal surface — dark in both themes */
+  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.28);
+  --topo: rgba(120,200,150,0.6); --topo-opacity: 0.14;
+  --glow1: rgba(70,177,100,0.10); --glow2: rgba(45,138,118,0.07);
+  --r-lg: 10px; --r-md: 8px; --r-sm: 6px;
+}
+/* Light palette — applied on an explicit choice, or by OS preference when the
+   viewer hasn't chosen dark. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #eef1f6; --panel: #ffffff; --panel2: #f3f5f9; --line: #dbe1ea; --line-strong: #c4cddb;
+  --text: #1b2431; --muted: #5b6675; --faint: #8794a4;
+  --accent: #2f8a37; --accent-ink: #ffffff; --accent2: #2f6fe0;
+  --green: #2f9e4a; --red: #d23a30;
+  --term-bg: #0b0f17;
+  --shadow: 0 1px 2px rgba(20,30,50,.08), 0 8px 24px rgba(20,30,50,.10);
+  --topo: rgba(60,120,90,0.5); --topo-opacity: 0.05;
+  --glow1: rgba(70,177,100,0.06); --glow2: rgba(45,138,118,0.05);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #eef1f6; --panel: #ffffff; --panel2: #f3f5f9; --line: #dbe1ea; --line-strong: #c4cddb;
+    --text: #1b2431; --muted: #5b6675; --faint: #8794a4;
+    --accent: #2f8a37; --accent-ink: #ffffff; --accent2: #2f6fe0;
+    --green: #2f9e4a; --red: #d23a30;
+    --shadow: 0 1px 2px rgba(20,30,50,.08), 0 8px 24px rgba(20,30,50,.10);
+    --topo: rgba(60,120,90,0.5); --topo-opacity: 0.05;
+    --glow1: rgba(70,177,100,0.06); --glow2: rgba(45,138,118,0.05);
+  }
 }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
@@ -16,17 +50,17 @@ body {
   background: var(--bg); color: var(--text);
   font-family: var(--font); font-size: 14px; -webkit-font-smoothing: antialiased;
 }
-/* Sysible topographic ground: the white contour overlay recoloured to brand green
-   via a CSS mask + a soft green glow — the same background as SLEP / Controller. */
+/* Sysible topographic ground — the contour overlay, recoloured and kept subtle so
+   it reads as texture, not decoration. Tuned right down from the earlier loud green. */
 body::before { content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
-  background-color: rgba(90,216,126,0.85);
+  background-color: var(--topo);
   -webkit-mask: url("/brand-topo-overlay.png") center / cover no-repeat;
           mask: url("/brand-topo-overlay.png") center / cover no-repeat;
-  opacity: 0.62; }
+  opacity: var(--topo-opacity); }
 body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(85% 60% at 12% -8%, rgba(70,177,100,0.13), transparent 55%),
-    radial-gradient(80% 70% at 100% 112%, rgba(45,138,118,0.10), transparent 55%); }
+    radial-gradient(85% 60% at 12% -8%, var(--glow1), transparent 55%),
+    radial-gradient(80% 70% at 100% 112%, var(--glow2), transparent 55%); }
 .center { display: grid; place-items: center; height: 100%; }
 .muted { color: var(--muted); }
 
@@ -34,21 +68,27 @@ body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-event
 .login-wrap { display: grid; place-items: center; height: 100%; }
 .login {
   display: flex; flex-direction: column; gap: 10px; width: 300px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 24px; box-shadow: var(--shadow);
 }
 .login-brand { font-size: 20px; margin-bottom: 6px; letter-spacing: .3px; }
 .login-brand b { color: var(--accent); }
 .login input, .add-host input, .add-host textarea {
-  background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-sm);
   color: var(--text); padding: 9px 11px; font: inherit; width: 100%;
 }
+.login input:focus, .add-host input:focus, .add-host textarea:focus,
+.term-find input:focus { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .login-err { color: var(--red); font-size: 13px; }
 button.primary, .side-btn {
-  background: var(--accent); color: #06210c; font-weight: 600; border: 0; border-radius: 8px;
+  background: var(--accent); color: var(--accent-ink); font-weight: 600; border: 0; border-radius: var(--r-sm);
   padding: 9px 12px; cursor: pointer; font-family: inherit; font-size: inherit;
 }
-button.primary:disabled, .side-btn:disabled { opacity: .6; }
+button.primary:hover, .side-btn:hover { filter: brightness(1.06); }
+button.primary:disabled, .side-btn:disabled { opacity: .55; filter: none; cursor: default; }
 .side-btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); font-weight: 400; }
+.side-btn.ghost:hover { filter: none; }
 a, .link { color: var(--accent2); }
 
 /* ---------- shell ---------- */
@@ -89,13 +129,18 @@ a, .link { color: var(--accent2); }
   background: var(--panel); border-bottom: 1px solid var(--line);
 }
 .tab {
-  background: var(--panel2); border: 1px solid var(--line); color: var(--text);
-  border-radius: 8px 8px 0 0; padding: 6px 12px; cursor: pointer; font: inherit;
-  display: flex; align-items: center; gap: 8px;
+  background: transparent; border: 1px solid transparent; border-bottom: 0; color: var(--muted);
+  border-radius: var(--r-sm) var(--r-sm) 0 0; padding: 6px 12px; cursor: pointer; font: inherit;
+  display: flex; align-items: center; gap: 8px; position: relative;
 }
-.tab.active { background: var(--accent); border-color: var(--accent); color: #06210c; font-weight: 600; }
+.tab:hover { color: var(--text); background: var(--panel2); }
+/* Active tab: a quiet panel with a green underline, not a solid green block. */
+.tab.active { background: var(--panel2); border-color: var(--line); color: var(--text); font-weight: 500; }
+.tab.active::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px;
+  background: var(--accent); border-radius: 2px; }
 .tab-x:hover { color: var(--red); }
-.tab-add { background: transparent; border: 1px solid var(--line); color: var(--text); border-radius: 8px; cursor: pointer; padding: 6px 10px; }
+.tab-add { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: var(--r-sm); cursor: pointer; padding: 6px 10px; }
+.tab-add:hover { color: var(--text); border-color: var(--accent); }
 .tab-tools { margin-left: auto; display: flex; gap: 4px; }
 .tool { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 28px;
   background: var(--panel2); border: 1px solid var(--line); color: var(--muted); border-radius: 7px; cursor: pointer; padding: 0; }
@@ -117,7 +162,7 @@ a, .link { color: var(--accent2); }
 .tile.active .tile-h { color: var(--text); border-color: var(--accent); }
 .tile-body {
   flex: 1; min-height: 0; border: 1px solid var(--line); border-top: 0;
-  border-radius: 0 0 8px 8px; overflow: hidden; background: #0b0f17;
+  border-radius: 0 0 8px 8px; overflow: hidden; background: var(--term-bg);
 }
 .tile.active .tile-body { border-color: var(--accent); }
 .term { width: 100%; height: 100%; padding: 4px 2px 2px 6px; }
@@ -130,7 +175,7 @@ a, .link { color: var(--accent2); }
 .divider:hover::after { background: var(--accent); opacity: .5; }
 
 /* ---------- pop-out ---------- */
-.popout { position: fixed; inset: 0; background: #0b0f17; }
+.popout { position: fixed; inset: 0; background: var(--term-bg); }
 .popout .term { padding: 6px; }
 
 /* Controller-proxied host markers */
@@ -188,19 +233,35 @@ a, .link { color: var(--accent2); }
 .side-host-open .dot.up { background: var(--green); }
 .side-host-open .dot.down { background: var(--red); }
 
-/* ---------- fleet actions modal ---------- */
+/* ---------- theme toggle + footer ---------- */
+.side-foot-actions { display: flex; align-items: center; gap: 6px; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px;
+  background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: var(--r-sm); cursor: pointer; }
+.icon-btn:hover { color: var(--text); border-color: var(--accent); }
+
+/* ---------- fleet actions (sidebar group) ---------- */
+.side-sec-count { font-size: 10px; font-weight: 600; color: var(--faint);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; letter-spacing: 0; }
+.fleet-group { display: flex; flex-direction: column; gap: 4px; padding: 6px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-md); }
+.fleet-btn { text-align: left; background: transparent; border: 1px solid transparent; color: var(--text);
+  border-radius: var(--r-sm); padding: 7px 9px; cursor: pointer; font: inherit; font-size: 12.5px; }
+.fleet-btn:hover { background: var(--panel); border-color: var(--line); }
+.fleet-btn.danger { color: var(--red); }
+.fleet-btn.danger:hover { background: color-mix(in srgb, var(--red) 12%, transparent); border-color: var(--red); }
+.fleet-sep { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint);
+  margin: 4px 2px 1px; padding-top: 5px; border-top: 1px solid var(--line); }
 .side-btn.sm { padding: 6px 10px; font-size: 12px; text-align: left; }
-.side-btn.ghost.danger:hover { border-color: var(--red); color: var(--red); }
-.modal-back { position: fixed; inset: 0; background: rgba(4,7,12,.6); display: grid;
+.modal-back { position: fixed; inset: 0; background: rgba(4,7,12,.5); backdrop-filter: blur(2px); display: grid;
   place-items: center; z-index: 50; }
 .modal { width: min(760px, 92vw); max-height: 82vh; display: flex; flex-direction: column;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; box-shadow: var(--shadow); }
 .modal-h { display: flex; align-items: center; gap: 6px; padding: 12px 14px;
   border-bottom: 1px solid var(--line); }
 .modal-body { padding: 10px 14px; overflow: auto; }
 .fleet-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
 .fleet-name { display: flex; align-items: center; gap: 8px; font-weight: 600; }
-.fleet-out { margin: 6px 0 0; padding: 8px 10px; background: #0b0f17; border: 1px solid var(--line);
+.fleet-out { margin: 6px 0 0; padding: 8px 10px; background: var(--term-bg); border: 1px solid var(--line);
   border-radius: 6px; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
   white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }
 
