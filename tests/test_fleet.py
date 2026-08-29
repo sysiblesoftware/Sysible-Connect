@@ -15,7 +15,7 @@ class _Resp:
 
 
 def _fake(routes):
-    def req(method, url, headers=None, json=None, verify=None, timeout=None):
+    def req(method, url, headers=None, json_body=None, verify=None, timeout=None):
         for (m, suffix), resp in routes.items():
             if method == m and url.endswith(suffix):
                 return resp() if callable(resp) else resp
@@ -24,14 +24,14 @@ def _fake(routes):
 
 
 def test_fleet_run_on_controller_host(monkeypatch):
-    monkeypatch.setattr(controller.requests, "request",
+    monkeypatch.setattr(controller, "_do_request",
                         _fake({("GET", "/remote/hosts"): _Resp(200, {})}))
     controller.connect("https://ctrl:9000", "K")
     hosts.upsert_controller_host("web1", address="10.0.0.11", transport="agent")
 
     reads = iter([_Resp(200, {"data": "load: 0.1\n", "closed": False}),
                   _Resp(200, {"data": "", "closed": True})])
-    monkeypatch.setattr(controller.requests, "request", _fake({
+    monkeypatch.setattr(controller, "_do_request", _fake({
         ("POST", "/terminal/open"): _Resp(200, {"session_id": "s1", "opened": True}),
         ("GET", "/terminal/s1/read"): lambda: next(reads),
         ("POST", "/terminal/s1/write"): _Resp(200, {"written": 1}),

@@ -1,10 +1,13 @@
 """Standalone local auth for Sysible Connect.
 
-Self-contained — no dependency on the Controller. A single admin account, seeded
-from the environment on first run (SYSIBLE_CONNECT_USER / SYSIBLE_CONNECT_PASSWORD,
-default admin / admin) and stored hashed at DATA_DIR/auth.json. Passwords are
-PBKDF2-HMAC-SHA256 (600k iterations); sessions are opaque random tokens kept in
-memory and carried by an httponly cookie.
+Self-contained — no dependency on the Controller. A single admin account, seeded on
+first run from SYSIBLE_CONNECT_USER (default 'admin') and SYSIBLE_CONNECT_PASSWORD;
+when no password is supplied a RANDOM one is generated, printed once to the logs, and
+the account is flagged must-change — so there is never a standing admin/admin default.
+The record is stored hashed at DATA_DIR/auth.json (0600, created O_EXCL|O_NOFOLLOW and
+read/rewritten O_NOFOLLOW so a pre-planted symlink can't hijack the credential store).
+Passwords are PBKDF2-HMAC-SHA256 (600k iterations); sessions are opaque random tokens
+kept in memory and carried by an httponly cookie.
 """
 from __future__ import annotations
 
@@ -30,17 +33,37 @@ def _hash(password: str, salt: bytes) -> str:
 
 
 def _load() -> dict:
+    # Read refusing to follow a symlink at the final component (O_NOFOLLOW), so a
+    # pre-planted symlink at auth.json can't redirect the read to a substituted record.
     try:
-        return json.loads(_AUTH_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
+        fd = os.open(str(_AUTH_FILE), os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return {}
+    try:
+        raw = os.read(fd, 1_000_000)
+    finally:
+        os.close(fd)
+    try:
+        return json.loads(raw)
+    except (ValueError, json.JSONDecodeError):
         return {}
 
 
 def _save(rec: dict) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(_AUTH_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    data = json.dumps(rec).encode()
     try:
-        os.write(fd, json.dumps(rec).encode())
+        # First write: create race-safe (O_EXCL|O_NOFOLLOW at 0600) so a local user
+        # can't pre-plant a symlink to redirect the credential store to an attacker
+        # path, and there's no exists()->open() TOCTOU.
+        fd = os.open(str(_AUTH_FILE),
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        # Legitimate rewrite (password change / must_change flip): overwrite the
+        # existing record in place, still refusing to follow a symlink (O_NOFOLLOW).
+        fd = os.open(str(_AUTH_FILE), os.O_WRONLY | os.O_NOFOLLOW | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, data)
     finally:
         os.close(fd)
 

@@ -15,10 +15,11 @@ class _Resp:
 
 
 def _fake_api(routes, *, record=None):
-    """routes: {(METHOD, path_suffix): _Resp}. path matched by endswith."""
-    def req(method, url, headers=None, json=None, verify=None, timeout=None):
+    """routes: {(METHOD, path_suffix): _Resp}. path matched by endswith. Mocks the
+    controller._do_request seam (all outbound Controller HTTP funnels through it)."""
+    def req(method, url, headers=None, json_body=None, verify=None, timeout=None):
         if record is not None:
-            record.append((method, url, json))
+            record.append((method, url, json_body))
         for (m, suffix), resp in routes.items():
             if method == m and url.endswith(suffix):
                 return resp() if callable(resp) else resp
@@ -37,14 +38,14 @@ def test_requires_auth(client):
 
 
 def test_connect_bad_key(auth_client, monkeypatch):
-    monkeypatch.setattr(controller.requests, "request",
+    monkeypatch.setattr(controller, "_do_request",
                         _fake_api({("GET", "/remote/hosts"): _Resp(401)}))
     r = auth_client.post("/api/controller", json={"base_url": "https://ctrl:9000", "api_key": "bad"})
     assert r.status_code == 400 and "rejected" in r.json()["detail"].lower()
 
 
 def test_connect_then_sync_imports_fleet(auth_client, monkeypatch):
-    monkeypatch.setattr(controller.requests, "request", _fake_api({
+    monkeypatch.setattr(controller, "_do_request", _fake_api({
         ("GET", "/remote/hosts"): _Resp(200, {"db1": {"ip": "10.0.0.21", "user": "deploy",
                                                        "port": 2222, "environment": "prod"}}),
         ("GET", "/agents"): _Resp(200, {"agents": [
@@ -65,7 +66,7 @@ def test_connect_then_sync_imports_fleet(auth_client, monkeypatch):
 
 
 def test_disconnect(auth_client, monkeypatch):
-    monkeypatch.setattr(controller.requests, "request",
+    monkeypatch.setattr(controller, "_do_request",
                         _fake_api({("GET", "/remote/hosts"): _Resp(200, {})}))
     auth_client.post("/api/controller", json={"base_url": "https://ctrl:9000", "api_key": "K"})
     assert auth_client.get("/api/controller").json()["connected"] is True
@@ -76,7 +77,7 @@ def test_disconnect(auth_client, monkeypatch):
 # --------------------------------------------------------- terminal proxy unit
 def test_terminal_proxy_open_read_write(monkeypatch):
     # A connected Controller (so TerminalProxy can load the config).
-    monkeypatch.setattr(controller.requests, "request",
+    monkeypatch.setattr(controller, "_do_request",
                         _fake_api({("GET", "/remote/hosts"): _Resp(200, {})}))
     controller.connect("https://ctrl:9000", "K")
 
@@ -85,7 +86,7 @@ def test_terminal_proxy_open_read_write(monkeypatch):
         _Resp(200, {"data": "", "closed": True}),   # shell ended
     ])
     sent = []
-    monkeypatch.setattr(controller.requests, "request", _fake_api({
+    monkeypatch.setattr(controller, "_do_request", _fake_api({
         ("POST", "/terminal/open"): _Resp(200, {"session_id": "sid123", "opened": True}),
         ("GET", "/terminal/sid123/read"): lambda: next(reads),
         ("POST", "/terminal/sid123/write"): _Resp(200, {"written": 3}),
@@ -101,10 +102,10 @@ def test_terminal_proxy_open_read_write(monkeypatch):
 
 
 def test_terminal_proxy_agent_offline(monkeypatch):
-    monkeypatch.setattr(controller.requests, "request",
+    monkeypatch.setattr(controller, "_do_request",
                         _fake_api({("GET", "/remote/hosts"): _Resp(200, {})}))
     controller.connect("https://ctrl:9000", "K")
-    monkeypatch.setattr(controller.requests, "request",
+    monkeypatch.setattr(controller, "_do_request",
                         _fake_api({("POST", "/terminal/open"): _Resp(503, {"detail": "agent offline"})}))
     try:
         controller.TerminalProxy("web1")
@@ -122,7 +123,7 @@ def test_connect_refuses_loopback(auth_client):
 
 def test_controller_key_encrypted_at_rest(auth_client, monkeypatch):
     # The machine API key must not sit in plaintext on disk (F2).
-    monkeypatch.setattr(controller.requests, "request",
+    monkeypatch.setattr(controller, "_do_request",
                         _fake_api({("GET", "/remote/hosts"): _Resp(200, {})}))
     auth_client.post("/api/controller", json={"base_url": "https://ctrl:9000", "api_key": "SECRET-KEY-123"})
     raw = controller._CFG.read_text()
@@ -133,10 +134,11 @@ def test_controller_key_encrypted_at_rest(auth_client, monkeypatch):
 
 def test_connect_with_username_password(auth_client, monkeypatch):
     # Username/password path: exchange creds at /auth/api-key, then validate the key.
-    monkeypatch.setattr(controller.requests, "post",
-                        lambda url, json=None, verify=None, timeout=None: _Resp(200, {"api_key": "EXCH-KEY"}))
-    monkeypatch.setattr(controller.requests, "request",
-                        _fake_api({("GET", "/remote/hosts"): _Resp(200, {})}))
+    # /admin/login (best-effort run-as token) is left to default 404 → tokenless connect.
+    monkeypatch.setattr(controller, "_do_request", _fake_api({
+        ("POST", "/auth/api-key"): _Resp(200, {"api_key": "EXCH-KEY"}),
+        ("GET", "/remote/hosts"): _Resp(200, {}),
+    }))
     r = auth_client.post("/api/controller", json={"base_url": "https://ctrl:9000",
                                                   "username": "admin", "password": "pw"})
     assert r.status_code == 200 and r.json()["connected"] is True
@@ -144,8 +146,9 @@ def test_connect_with_username_password(auth_client, monkeypatch):
 
 
 def test_connect_creds_rejected(auth_client, monkeypatch):
-    monkeypatch.setattr(controller.requests, "post",
-                        lambda url, json=None, verify=None, timeout=None: _Resp(401, {"detail": "bad creds"}))
+    monkeypatch.setattr(controller, "_do_request", _fake_api({
+        ("POST", "/auth/api-key"): _Resp(401, {"detail": "bad creds"}),
+    }))
     r = auth_client.post("/api/controller", json={"base_url": "https://ctrl:9000",
                                                   "username": "admin", "password": "wrong"})
     assert r.status_code == 400 and "bad creds" in r.json()["detail"]

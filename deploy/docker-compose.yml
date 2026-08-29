@@ -25,7 +25,14 @@ services:
     image: sysible-connect:latest
     container_name: sysible-connect
     ports:
-      - "8700:8700"                 # the web console (API + SPA) over HTTPS
+      # Standalone Connect: the web console (API + SPA) over HTTPS on the LAN.
+      # SSO NOTE: behind the SLOP gateway, Connect must be reachable ONLY through the
+      # gateway (that is the trust boundary — see the SSO trust comment in backend/app.py).
+      # Do NOT publish 8700 on 0.0.0.0 in that deployment: bind it to loopback / the
+      # gateway network (e.g. `127.0.0.1:8700:8700`, or drop this block and put Connect
+      # on the gateway's internal compose network) so a LAN client can't hit :8700
+      # directly and bypass Caddy. The SLOP installer wires this up.
+      - "8700:8700"
     volumes:
       - connect-data:/data
     environment:

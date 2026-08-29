@@ -13,8 +13,10 @@ from fastapi.testclient import TestClient
 import backend.app as app_module
 
 _SECRET = "shhh-gateway-secret"
+# Origin matches the default terminal-WS allowlist (https://connect.slop.lan); it is
+# harmless on the HTTP requests and required on the WS upgrade.
 _HDRS = {"X-Sysible-User": "alice", "X-Sysible-Role": "operator",
-         "X-Sysible-Auth": _SECRET}
+         "X-Sysible-Auth": _SECRET, "Origin": "https://connect.slop.lan"}
 
 
 @pytest.fixture

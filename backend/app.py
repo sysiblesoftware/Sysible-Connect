@@ -50,6 +50,20 @@ auth.ensure_admin()
 _TRUST_GATEWAY = os.getenv("SYSIBLE_CONNECT_TRUST_GATEWAY_AUTH", "0") == "1"
 _SSO_SECRET = os.getenv("SYSIBLE_SSO_SHARED_SECRET", "")
 
+# SLOP asserts one of {superuser, operator, auditor} in X-Sysible-Role. Only these
+# two may take state-changing actions (open terminals, run fleet commands, add/remove
+# hosts, transfer files, manage the Controller link); 'auditor' is read-only oversight,
+# and anything else (empty/unknown) fails closed. Standalone Connect has NO role
+# source, so this floor is only ever consulted when a gateway identity is present.
+_PRIVILEGED_ROLES = {"superuser", "operator"}
+
+# Origin allowlist for the terminal websocket (defeats cross-site WebSocket hijacking
+# from a sibling *.slop.lan origin). Comma-separated; defaults to the Connect
+# subdomain the SLOP gateway serves. Checked BEFORE ws.accept(); a missing or
+# mismatched Origin is rejected.
+_ALLOWED_ORIGINS = {o.strip() for o in os.getenv(
+    "SYSIBLE_CONNECT_ALLOWED_ORIGINS", "https://connect.slop.lan").split(",") if o.strip()}
+
 # FAIL CLOSED: trust mode on but no shared secret means we cannot prove a request
 # actually came through the gateway, so identity headers must NOT be honored. Warn
 # once at startup so the misconfiguration is obvious in the logs.
@@ -79,19 +93,40 @@ def gateway_identity(headers) -> str | None:
     return user or None
 
 
+def gateway_role(headers) -> str | None:
+    """The gateway-asserted role (lower-cased) ONLY when SSO trust mode is active and
+    the request provably came through the gateway; otherwise None. Standalone Connect
+    has no role source, so it always returns None and the role floor is never applied
+    there. In trust mode an absent header yields "" (an unrecognized role → denied)."""
+    if not gateway_identity(headers):
+        return None
+    return (headers.get("x-sysible-role") or "").strip().lower()
+
+
 # --------------------------------------------------------------------- auth
 def current_user(request: Request) -> str:
     # SSO gateway trust takes precedence: if the request provably came through the
     # gateway, trust its asserted identity and skip the cookie path entirely.
     gw = gateway_identity(request.headers)
     if gw:
-        # Stash the asserted role for possible future gating — nothing consumes it
-        # today (Connect has no role concept; any authenticated user is a full user).
+        # Surface the asserted role so require_operator can enforce the read-only floor.
         request.state.role = request.headers.get("x-sysible-role", "")
         return gw
     user = auth.session_user(request.cookies.get(COOKIE))
     if not user:
         raise HTTPException(status_code=401, detail="Not signed in.")
+    return user
+
+
+def require_operator(request: Request, user: str = Depends(current_user)) -> str:
+    """Authorization floor for state-changing / shell routes. In gateway-trust (SSO)
+    mode a read-only 'auditor' — and any empty/unrecognized asserted role — is rejected
+    with 403 (fail closed). Standalone Connect has no role source (gateway_role → None),
+    so its existing single-user behavior is left unchanged."""
+    role = gateway_role(request.headers)
+    if role is not None and role not in _PRIVILEGED_ROLES:
+        raise HTTPException(status_code=403,
+                            detail="This action requires an operator role; auditor accounts are read-only.")
     return user
 
 
@@ -120,6 +155,12 @@ def _throttle_key(request: Request, user: str) -> str:
 
 @app.post("/api/login")
 def login(request: Request, response: Response, body: dict = Body(...)):
+    # In SSO gateway-trust mode the gateway is the ONLY auth path: the local password
+    # login is disabled so an attacker reaching :8700 directly can't spray the local
+    # admin credential (and can't lock a username out) bypassing the gateway.
+    if _TRUST_GATEWAY and _SSO_SECRET:
+        raise HTTPException(status_code=403,
+                            detail="Local login is disabled — sign in through the SLOP gateway.")
     user = str(body.get("username") or "").strip()
     pw = str(body.get("password") or "")
     key = _throttle_key(request, user)
@@ -180,7 +221,7 @@ def list_hosts(user: str = Depends(current_user)):
 
 
 @app.post("/api/hosts")
-def add_host(body: dict = Body(...), user: str = Depends(current_user)):
+def add_host(body: dict = Body(...), user: str = Depends(require_operator)):
     try:
         hosts.add_host(
             str(body.get("name") or "").strip(), str(body.get("address") or "").strip(),
@@ -192,13 +233,13 @@ def add_host(body: dict = Body(...), user: str = Depends(current_user)):
 
 
 @app.delete("/api/hosts/{name}")
-def delete_host(name: str, user: str = Depends(current_user)):
+def delete_host(name: str, user: str = Depends(require_operator)):
     return {"deleted": hosts.delete_host(name)}
 
 
 # ------------------------------------------------------------- file transfer
 @app.post("/api/hosts/{name}/files/list")
-def files_list(name: str, body: dict = Body(default=None), user: str = Depends(current_user)):
+def files_list(name: str, body: dict = Body(default=None), user: str = Depends(require_operator)):
     try:
         return files.list_dir(name, str((body or {}).get("path") or "."))
     except files.FileError as e:
@@ -206,7 +247,7 @@ def files_list(name: str, body: dict = Body(default=None), user: str = Depends(c
 
 
 @app.get("/api/hosts/{name}/files/download")
-def files_download(name: str, path: str, user: str = Depends(current_user)):
+def files_download(name: str, path: str, user: str = Depends(require_operator)):
     try:
         data = files.download(name, path)
     except files.FileError as e:
@@ -218,7 +259,7 @@ def files_download(name: str, path: str, user: str = Depends(current_user)):
 
 @app.post("/api/hosts/{name}/files/upload")
 async def files_upload(name: str, path: str = Form(...), file: UploadFile = File(...),
-                       user: str = Depends(current_user)):
+                       user: str = Depends(require_operator)):
     dest = path if path.endswith("/") else path
     # If a directory was given, append the uploaded filename.
     if dest.endswith("/"):
@@ -262,7 +303,7 @@ def controller_status(user: str = Depends(current_user)):
 
 
 @app.post("/api/controller")
-def controller_connect(body: dict = Body(...), user: str = Depends(current_user)):
+def controller_connect(body: dict = Body(...), user: str = Depends(require_operator)):
     b = body or {}
     base = str(b.get("base_url") or "").strip()
     try:
@@ -277,13 +318,13 @@ def controller_connect(body: dict = Body(...), user: str = Depends(current_user)
 
 
 @app.delete("/api/controller")
-def controller_disconnect(user: str = Depends(current_user)):
+def controller_disconnect(user: str = Depends(require_operator)):
     controller.disconnect()
     return {"connected": False}
 
 
 @app.post("/api/controller/sync")
-def controller_sync(user: str = Depends(current_user)):
+def controller_sync(user: str = Depends(require_operator)):
     try:
         return controller.sync()
     except controller.ControllerError as e:
@@ -292,7 +333,7 @@ def controller_sync(user: str = Depends(current_user)):
 
 # ---------------------------------------------------------------- fleet actions
 @app.post("/api/fleet/run")
-def fleet_run(body: dict = Body(...), user: str = Depends(current_user)):
+def fleet_run(body: dict = Body(...), user: str = Depends(require_operator)):
     """Run one command across hosts (default: all). Uses the terminal transport, so
     it reaches agent, SSH, and local hosts alike. Returns per-host output."""
     command = str(body.get("command") or "")
@@ -308,12 +349,29 @@ def fleet_run(body: dict = Body(...), user: str = Depends(current_user)):
 # ------------------------------------------------------------------ terminal
 @app.websocket("/api/terminal/ws")
 async def terminal_ws(ws: WebSocket):
+    # Cross-site WebSocket hijacking defense: a browser can't forge the Origin header,
+    # so an exact allowlist match (checked BEFORE accept) stops a sibling *.slop.lan
+    # page from opening this PTY over the victim's ambient session. A missing Origin is
+    # rejected too — the legitimate SPA always sends one.
+    if ws.headers.get("origin") not in _ALLOWED_ORIGINS:
+        await ws.close(code=4403)
+        return
     # The websocket bypasses current_user, so gateway trust is applied here
     # separately. Caddy forwards the X-Sysible-* headers on the WS upgrade too, so
     # ws.headers carries them; fall back to the session cookie for standalone Connect.
-    if not (gateway_identity(ws.headers) or auth.session_user(ws.cookies.get(COOKIE))):
+    gw = gateway_identity(ws.headers)
+    if not (gw or auth.session_user(ws.cookies.get(COOKIE))):
         await ws.close(code=4401)
         return
+    # Role floor (SSO mode): a terminal is the shell primitive, so a read-only auditor —
+    # and any empty/unrecognized asserted role — is denied here, mirroring
+    # require_operator on the HTTP routes. Fail closed. Standalone Connect (no gateway
+    # identity) is unaffected.
+    if gw:
+        role = (ws.headers.get("x-sysible-role") or "").strip().lower()
+        if role not in _PRIVILEGED_ROLES:
+            await ws.close(code=4403)
+            return
     await ws.accept()
     kind = ws.query_params.get("kind", "local")
     try:
@@ -386,8 +444,15 @@ if _DIST.is_dir():
 
     @app.get("/{full_path:path}")
     def spa(full_path: str):
-        # Serve real files; fall back to index.html for client-side routes.
-        candidate = (_DIST / full_path)
-        if full_path and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(_DIST / "index.html")
+        # Serve real files from the built SPA tree; fall back to index.html for
+        # client-side routes. SECURITY: resolve() collapses any '..' (even percent-
+        # encoded, since the ASGI layer has already decoded the path) and the
+        # containment check rejects anything that escapes the dist tree, so this
+        # catch-all can never read arbitrary host files (e.g. /proc/self/environ,
+        # /data/auth.json). A '..' segment is refused up front as defense-in-depth.
+        base = _DIST.resolve()
+        if full_path and ".." not in full_path.split("/"):
+            candidate = (base / full_path).resolve()
+            if candidate.is_file() and candidate.is_relative_to(base):
+                return FileResponse(candidate)
+        return FileResponse(base / "index.html")

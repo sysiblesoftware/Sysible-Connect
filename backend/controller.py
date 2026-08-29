@@ -26,6 +26,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+import urllib3.connection
+import urllib3.connectionpool
 
 from .auth import DATA_DIR
 from . import hosts as host_store
@@ -39,11 +41,120 @@ class ControllerError(Exception):
     pass
 
 
+# ------------------------------------------------------- SSRF pin (peer re-check)
+# _guard_url resolves + validates the target's addresses up front, but `requests`
+# (and ssl) re-resolve the hostname independently, so a DNS-rebinding / TTL-0 flip
+# between the check and the connect could still land on an internal address (e.g.
+# cloud metadata 169.254.169.254). To close that TOCTOU gap, every outbound call
+# goes through a session whose connections re-validate the ACTUAL peer address at
+# TCP connect time and abort BEFORE any request bytes / credentials are sent.
+def _blocked_ip(ip) -> bool:
+    """True if `ip` (an ipaddress address) is one an on-host SSRF must never reach:
+    loopback, link-local (incl. cloud metadata), unspecified, multicast or reserved.
+    Private LAN ranges are intentionally allowed (real on-prem Controllers)."""
+    return (ip.is_loopback or ip.is_link_local or ip.is_unspecified
+            or ip.is_multicast or ip.is_reserved)
+
+
+def _vet_addr(raw: str):
+    """Parse `raw` to an ipaddress, collapsing an IPv4-mapped / NAT64 IPv6 form to the
+    embedded IPv4 first so e.g. ::ffff:169.254.169.254 can't smuggle a blocked address
+    past the v6 checks. Returns None if it doesn't parse."""
+    try:
+        ip = ipaddress.ip_address(raw)
+    except ValueError:
+        return None
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return mapped if mapped is not None else ip
+
+
+def _assert_peer_allowed(sock) -> None:
+    try:
+        peer = sock.getpeername()[0]
+    except OSError:
+        return
+    ip = _vet_addr(peer)
+    if ip is not None and _blocked_ip(ip):
+        try:
+            sock.close()
+        except OSError:
+            pass
+        raise OSError(f"SSRF guard: refusing to send to blocked peer address {peer}")
+
+
+class _PinnedHTTPSConnection(urllib3.connection.HTTPSConnection):
+    def connect(self):
+        super().connect()
+        _assert_peer_allowed(self.sock)
+
+
+class _PinnedHTTPConnection(urllib3.connection.HTTPConnection):
+    def connect(self):
+        super().connect()
+        _assert_peer_allowed(self.sock)
+
+
+class _PinnedHTTPSPool(urllib3.connectionpool.HTTPSConnectionPool):
+    ConnectionCls = _PinnedHTTPSConnection
+
+
+class _PinnedHTTPPool(urllib3.connectionpool.HTTPConnectionPool):
+    ConnectionCls = _PinnedHTTPConnection
+
+
+class _SsrfGuardAdapter(requests.adapters.HTTPAdapter):
+    """A requests adapter whose connections re-validate the peer address at TCP connect
+    time and abort if it's a blocked (internal) address — closing the DNS-rebinding
+    window a resolve-then-connect guard alone leaves open."""
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+        self.poolmanager.pool_classes_by_scheme = {
+            "http": _PinnedHTTPPool, "https": _PinnedHTTPSPool}
+
+
+_SESSION = requests.Session()
+_SESSION.mount("https://", _SsrfGuardAdapter())
+_SESSION.mount("http://", _SsrfGuardAdapter())
+
+
+def _do_request(method, url, *, headers=None, json_body=None, verify=None, timeout=20):
+    """Single outbound-HTTP choke point for all Controller calls. Routes through the
+    SSRF-pinned session so a peer that rebinds to an internal address is refused before
+    the request is sent. Tests patch THIS seam to mock the Controller's API."""
+    return _SESSION.request(method, url, headers=headers, json=json_body,
+                            verify=verify, timeout=timeout)
+
+
 # --------------------------------------------------------------- config store
+def _read_nofollow(path) -> bytes:
+    """Read a file refusing to follow a symlink at the final component (O_NOFOLLOW),
+    so a pre-planted symlink at the path can't redirect the read to a substituted file."""
+    fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        return os.read(fd, 1_000_000)
+    finally:
+        os.close(fd)
+
+
+def _write_nofollow(path, data: bytes) -> None:
+    """Write `data` to `path` at 0600: create race-safe (O_EXCL|O_NOFOLLOW) on first
+    write, overwrite in place (O_NOFOLLOW|O_TRUNC) thereafter — never following a
+    pre-planted symlink, closing the create race and the symlink-redirect on rewrite."""
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        fd = os.open(str(path), os.O_WRONLY | os.O_NOFOLLOW | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
 def _load() -> dict:
     try:
-        d = json.loads(_CFG.read_text())
-    except (OSError, json.JSONDecodeError):
+        d = json.loads(_read_nofollow(_CFG))
+    except (OSError, ValueError, json.JSONDecodeError):
         return {}
     if not isinstance(d, dict):
         return {}
@@ -66,11 +177,7 @@ def _save(cfg: dict) -> None:
     if out.get("admin_token"):
         out["admin_token_enc"] = secret.encrypt(out.pop("admin_token"))
     out.pop("admin_token", None)      # never write the identity token in plaintext
-    fd = os.open(str(_CFG), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, json.dumps(out).encode())
-    finally:
-        os.close(fd)
+    _write_nofollow(_CFG, json.dumps(out).encode())
 
 
 def status() -> dict:
@@ -99,10 +206,11 @@ def connect_with_credentials(base_url: str, username: str, password: str, totp_c
         payload["totp_code"] = totp_code
     cert = ""
     try:
-        resp = requests.post(base + "/auth/api-key", json=payload, verify=True, timeout=20)
+        resp = _do_request("POST", base + "/auth/api-key", json_body=payload, verify=True, timeout=20)
     except requests.exceptions.SSLError:
         cert = _fetch_server_cert(base)
-        resp = requests.post(base + "/auth/api-key", json=payload, verify=_ca_path(cert), timeout=20)
+        resp = _do_request("POST", base + "/auth/api-key", json_body=payload,
+                          verify=_ca_path(cert), timeout=20)
     except requests.exceptions.RequestException as e:
         raise ControllerError(f"could not reach the Controller at {base}: {e}")
     if resp.status_code == 404:
@@ -177,38 +285,45 @@ def _normalize(url: str) -> str:
     return url
 
 
-def _guard_url(url: str) -> None:
+def _guard_url(url: str) -> list[str]:
     """SSRF guard (parity with SLEP): resolve the Controller host and refuse
     loopback, link-local (incl. cloud metadata 169.254.169.254), unspecified,
     multicast and reserved addresses, so 'connect a Controller' can't be aimed at an
-    internal service. Private LAN ranges stay allowed (real on-prem Controllers)."""
+    internal service. Private LAN ranges stay allowed (real on-prem Controllers).
+
+    FAILS CLOSED: an unresolvable host is a hard rejection (not an allow), and EVERY
+    resolved address must pass — a single blocked address rejects the whole name, so
+    a split-horizon / partly-internal answer can't slip through. Returns the vetted
+    address list so callers can pin the connection to a checked IP."""
     host = urlparse(url).hostname or ""
     if not host:
         raise ControllerError("Invalid Controller URL.")
     try:
         infos = socket.getaddrinfo(host, None)
-    except socket.gaierror:
-        return  # let the real request surface a clean DNS error
+    except socket.gaierror as e:
+        raise ControllerError(
+            f"Refusing to connect to {host}: its address could not be resolved ({e}).")
+    vetted: list[str] = []
     for info in infos:
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
+        raw = info[4][0]
+        ip = _vet_addr(raw)
+        if ip is None:
             continue
-        if ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved:
+        if _blocked_ip(ip):
             raise ControllerError(
                 f"Refusing to connect to {host} ({ip}): loopback/link-local/reserved "
                 "addresses (including cloud metadata) are blocked.")
+        vetted.append(raw)
+    if not vetted:
+        raise ControllerError(f"Refusing to connect to {host}: it resolved to no usable address.")
+    return vetted
 
 
 # ------------------------------------------------------------------ TLS TOFU
 def _ca_path(pem: str) -> str | None:
     if not pem:
         return None
-    fd = os.open(str(_CA), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, pem.encode())
-    finally:
-        os.close(fd)
+    _write_nofollow(_CA, pem.encode())
     return str(_CA)
 
 
@@ -216,8 +331,20 @@ def _fetch_server_cert(base_url: str) -> str:
     u = urlparse(base_url)
     if u.scheme != "https" or not u.hostname:
         raise ControllerError("A certificate can only be pinned for an https Controller URL.")
+    # Pin the cert fetch to a vetted address (parity with the request path): resolve +
+    # validate, then connect the TLS socket directly to that IP with SNI = hostname, so
+    # ssl's own re-resolution can't be rebound to an internal service.
+    ip = _guard_url(base_url)[0]
     try:
-        return ssl.get_server_certificate((u.hostname, u.port or 443), timeout=15)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False          # TOFU: we're fetching an untrusted cert to pin it
+        ctx.verify_mode = ssl.CERT_NONE
+        with socket.create_connection((ip, u.port or 443), timeout=15) as sock:
+            with ctx.wrap_socket(sock, server_hostname=u.hostname) as ssock:
+                der = ssock.getpeercert(binary_form=True)
+        return ssl.DER_cert_to_PEM_cert(der)
+    except ControllerError:
+        raise
     except Exception as e:  # noqa: BLE001
         raise ControllerError(f"could not fetch the Controller's certificate: {e}")
 
@@ -236,13 +363,13 @@ def _request(cfg: dict, method: str, path: str, *, json_body=None, timeout=20):
         headers["X-Sysible-Admin-Token"] = cfg["admin_token"]
     verify = _ca_path(cfg.get("tls_cert", "")) or True
     try:
-        return requests.request(method, url, headers=headers, json=json_body,
-                                verify=verify, timeout=timeout)
+        return _do_request(method, url, headers=headers, json_body=json_body,
+                           verify=verify, timeout=timeout)
     except requests.exceptions.SSLError:
         pem = _fetch_server_cert(cfg["base_url"])
         cfg["tls_cert"] = pem
-        return requests.request(method, url, headers=headers, json=json_body,
-                                verify=_ca_path(pem), timeout=timeout)
+        return _do_request(method, url, headers=headers, json_body=json_body,
+                           verify=_ca_path(pem), timeout=timeout)
     except requests.exceptions.RequestException as e:
         raise ControllerError(f"could not reach the Controller at {cfg['base_url']}: {e}")
 

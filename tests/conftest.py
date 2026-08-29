@@ -21,6 +21,28 @@ import backend.hosts as hosts  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _stub_controller_dns(monkeypatch):
+    """The Controller SSRF guard now FAILS CLOSED on an unresolvable host. Tests use
+    stand-in hostnames like 'ctrl' that don't resolve here, so map them to a benign
+    public TEST-NET address; IP literals resolve to themselves so loopback/metadata
+    rejection is still exercised (e.g. test_connect_refuses_loopback)."""
+    import ipaddress
+    import socket as _socket
+    import backend.controller as controller
+
+    def _fake_getaddrinfo(host, *a, **k):
+        try:
+            ipaddress.ip_address(host)
+            addr = host
+        except ValueError:
+            addr = "203.0.113.10"   # TEST-NET-3 (RFC 5737): public, not blocked
+        return [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", (addr, 0))]
+
+    monkeypatch.setattr(controller.socket, "getaddrinfo", _fake_getaddrinfo)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate():
     """Empty host store, no Controller connection, and a seeded admin before every
     test, so order never matters."""
