@@ -7,6 +7,8 @@ interactive SSH session on a managed host. Serves the built SPA in production.
 from __future__ import annotations
 
 import asyncio
+import hmac
+import os
 import threading
 import time
 
@@ -26,8 +28,67 @@ app = FastAPI(title="Sysible Connect")
 auth.ensure_admin()
 
 
+# ------------------------------------------------------ SLOP SSO gateway trust
+# When Connect runs behind the SLOP single-sign-on gateway, an upstream Caddy
+# reverse proxy authenticates the browser and injects identity headers on every
+# proxied request (and on the websocket upgrade handshake):
+#   X-Sysible-User: <username>
+#   X-Sysible-Role: <role>          role ∈ {superuser, operator, auditor}
+#   X-Sysible-Auth: <shared secret> proves the request came through the gateway
+# In that mode Connect trusts the gateway-asserted identity INSTEAD of requiring
+# its own cookie login. OFF by default, so standalone Connect is unchanged.
+#
+# TRUST BOUNDARY: in SSO mode Connect is reachable ONLY through the gateway, and
+# the gateway stamps X-Sysible-Auth with the shared secret on every request it
+# forwards. A browser hitting Connect directly cannot know that secret, so it can
+# never spoof an identity — the secret check IS the boundary. It holds regardless
+# of container network IPs, and Connect (unlike SLEP) has no BFF/second proxy
+# layer, so there is no client-supplied copy to strip: the match is the whole gate.
+#
+# Env is read once at module load (matching the SYSIBLE_CONNECT_* / auth.py
+# convention); the request headers are read per call.
+_TRUST_GATEWAY = os.getenv("SYSIBLE_CONNECT_TRUST_GATEWAY_AUTH", "0") == "1"
+_SSO_SECRET = os.getenv("SYSIBLE_SSO_SHARED_SECRET", "")
+
+# FAIL CLOSED: trust mode on but no shared secret means we cannot prove a request
+# actually came through the gateway, so identity headers must NOT be honored. Warn
+# once at startup so the misconfiguration is obvious in the logs.
+if _TRUST_GATEWAY and not _SSO_SECRET:
+    print("[sysible-connect] SYSIBLE_CONNECT_TRUST_GATEWAY_AUTH=1 but "
+          "SYSIBLE_SSO_SHARED_SECRET is empty — gateway identity headers will be "
+          "IGNORED (fail closed). Set the shared secret to enable SSO trust mode.",
+          flush=True)
+
+
+def gateway_identity(headers) -> str | None:
+    """Return the gateway-asserted username when SSO trust mode is active and the
+    request provably came through the gateway; otherwise None.
+
+    `headers` is any case-insensitive header mapping — a Starlette Request.headers
+    and a WebSocket.headers both qualify. Honors the identity ONLY when trust mode
+    is enabled AND a shared secret is configured AND the request's X-Sysible-Auth
+    matches it (constant-time) AND the asserted user is non-empty. Every other case
+    fails closed to None, so a caller that cannot present the secret can never
+    inject an identity.
+    """
+    if not (_TRUST_GATEWAY and _SSO_SECRET):
+        return None
+    if not hmac.compare_digest(headers.get("x-sysible-auth", ""), _SSO_SECRET):
+        return None
+    user = (headers.get("x-sysible-user") or "").strip()
+    return user or None
+
+
 # --------------------------------------------------------------------- auth
 def current_user(request: Request) -> str:
+    # SSO gateway trust takes precedence: if the request provably came through the
+    # gateway, trust its asserted identity and skip the cookie path entirely.
+    gw = gateway_identity(request.headers)
+    if gw:
+        # Stash the asserted role for possible future gating — nothing consumes it
+        # today (Connect has no role concept; any authenticated user is a full user).
+        request.state.role = request.headers.get("x-sysible-role", "")
+        return gw
     user = auth.session_user(request.cookies.get(COOKIE))
     if not user:
         raise HTTPException(status_code=401, detail="Not signed in.")
@@ -92,6 +153,11 @@ def logout(request: Request, response: Response):
 
 @app.get("/api/me")
 def me(request: Request):
+    # In gateway trust mode reflect the header identity so the SPA renders as
+    # logged-in; a gateway user has no local password, so never flag must-change.
+    gw = gateway_identity(request.headers)
+    if gw:
+        return {"user": gw, "must_change": False}
     user = auth.session_user(request.cookies.get(COOKIE))
     if not user:
         return JSONResponse({"user": None}, status_code=200)
@@ -242,7 +308,10 @@ def fleet_run(body: dict = Body(...), user: str = Depends(current_user)):
 # ------------------------------------------------------------------ terminal
 @app.websocket("/api/terminal/ws")
 async def terminal_ws(ws: WebSocket):
-    if not auth.session_user(ws.cookies.get(COOKIE)):
+    # The websocket bypasses current_user, so gateway trust is applied here
+    # separately. Caddy forwards the X-Sysible-* headers on the WS upgrade too, so
+    # ws.headers carries them; fall back to the session cookie for standalone Connect.
+    if not (gateway_identity(ws.headers) or auth.session_user(ws.cookies.get(COOKIE))):
         await ws.close(code=4401)
         return
     await ws.accept()
