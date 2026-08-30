@@ -11,6 +11,13 @@
 # ---- stage 1: build the React console -------------------------------------
 FROM node:22-slim AS web
 WORKDIR /web
+# URL prefix the console is served under: "/" standalone, "/connect/" behind the
+# SLOP gateway (which path-routes /connect/* to this app on one shared origin).
+# Vite bakes it into the asset URLs + the SPA's API base and terminal websocket
+# (webgui/frontend/vite.config.js). The SLOP installer passes /connect/ via
+# --build-arg; a plain build keeps the standalone root default.
+ARG SYSIBLE_BASE_PATH=/
+ENV SYSIBLE_BASE_PATH=${SYSIBLE_BASE_PATH}
 COPY webgui/frontend/package.json webgui/frontend/package-lock.json ./
 RUN npm ci
 COPY webgui/frontend/ ./

@@ -22,6 +22,11 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        # URL prefix the console is served under. "/" standalone; the SLOP
+        # installer sets "/connect/" so the SPA's assets + API base + terminal
+        # websocket live under the gateway's /connect/* path on the one origin.
+        SYSIBLE_BASE_PATH: "${SYSIBLE_BASE_PATH:-/}"
     image: sysible-connect:latest
     container_name: sysible-connect
     ports:

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { api } from './api.js'
+import { api, apiUrl } from './api.js'
 import Terminal from './Terminal.jsx'
 import Logo from './Logo.jsx'
 import { IconSplitRight, IconSplitDown, IconPopout, IconClose, IconSave, IconSun, IconMoon } from './icons.jsx'
@@ -356,13 +356,13 @@ function FilesModal({ host, onClose }) {
   useEffect(() => { load('.') }, [])   // eslint-disable-line
   const join = (name) => (data.path.replace(/\/$/, '') + '/' + name)
   const up = () => load(data.path.replace(/\/[^/]+\/?$/, '') || '/')
-  const dl = (name) => window.open(`/api/${base}/download?path=${encodeURIComponent(join(name))}`, '_blank')
+  const dl = (name) => window.open(apiUrl(`/api/${base}/download?path=${encodeURIComponent(join(name))}`), '_blank')
   const upload = async (fileList) => {
     const f = fileList && fileList[0]; if (!f) return
     setBusy(true); setErr('')
     try {
       const fd = new FormData(); fd.append('file', f); fd.append('path', data.path.replace(/\/$/, '') + '/')
-      const res = await fetch(`/api/${base}/upload`, { method: 'POST', body: fd })
+      const res = await fetch(apiUrl(`/api/${base}/upload`), { method: 'POST', body: fd })
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText)
       load(data.path)
     } catch (e) { setErr(e.message) } finally { setBusy(false) }
