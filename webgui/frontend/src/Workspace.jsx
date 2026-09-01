@@ -33,7 +33,16 @@ export default function Workspace({ me, onLogout }) {
 
   const loadHosts = () => api('hosts').then((d) => setHosts(d.hosts || [])).catch(() => {})
   const loadCtrl = () => api('controller').then(setCtrl).catch(() => {})
-  useEffect(() => { loadHosts(); loadCtrl() }, [])
+  useEffect(() => {
+    loadHosts()
+    // Load the Controller status; when we're auto-attached to the local Controller over
+    // SSO (no manual login), pull its fleet once, quietly — so hosts appear on their own,
+    // like when Connect was part of the Controller.
+    api('controller').then((s) => {
+      setCtrl(s)
+      if (s && s.connected && s.sso) api('controller/sync', { method: 'POST' }).then(() => loadHosts()).catch(() => {})
+    }).catch(() => {})
+  }, [])
 
   const connectController = async (form) => {
     try { const s = await api('controller', { method: 'POST', json: form }); setCtrl(s); setCtrlForm(false); syncController() }

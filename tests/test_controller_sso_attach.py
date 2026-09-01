@@ -57,3 +57,26 @@ def test_sync_authenticates_with_shared_secret_not_api_key(monkeypatch):
     for url, headers in seen:
         assert headers.get("X-Sysible-Auth") == "sso-shared-secret", (url, headers)
         assert "X-API-Key" not in headers, (url, headers)
+
+
+def test_auto_attaches_by_deriving_url_from_gateway_host(monkeypatch):
+    # No explicit SYSIBLE_CONNECT_CONTROLLER_URL: derive the local Controller from the
+    # host the browser reached Connect on (the gateway host) + :9000 — so it "just works"
+    # behind the gateway with zero config.
+    monkeypatch.setattr(controller, "_TRUST_GATEWAY", True)
+    monkeypatch.setattr(controller, "_SSO_SECRET", "sso-shared-secret")
+    monkeypatch.setattr(controller, "_LOCAL_CONTROLLER_URL", "")
+    monkeypatch.setattr(controller, "_DERIVED_CONTROLLER_URL", None)
+    controller.disconnect()
+    st = controller.status(host="192.168.8.139")
+    assert st["connected"] is True and st["sso"] is True
+    assert st["base_url"] == "https://192.168.8.139:9000"
+
+
+def test_explicit_url_wins_over_derivation(monkeypatch):
+    monkeypatch.setattr(controller, "_TRUST_GATEWAY", True)
+    monkeypatch.setattr(controller, "_SSO_SECRET", "sso-shared-secret")
+    monkeypatch.setattr(controller, "_LOCAL_CONTROLLER_URL", "https://sysible-controller:9000")
+    monkeypatch.setattr(controller, "_DERIVED_CONTROLLER_URL", None)
+    controller.disconnect()
+    assert controller.status(host="10.0.0.5")["base_url"] == "https://sysible-controller:9000"

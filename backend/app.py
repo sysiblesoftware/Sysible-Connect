@@ -297,9 +297,15 @@ def ping_hosts(user: str = Depends(current_user)):
 
 
 # ------------------------------------------------------------------ controller
+def _req_host(request) -> str:
+    """The host the browser reached Connect on — the gateway's host, so SSO auto-attach
+    can find the local Controller. Prefer the gateway-forwarded host, fall back to Host."""
+    return (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+
+
 @app.get("/api/controller")
-def controller_status(user: str = Depends(current_user)):
-    return controller.status()
+def controller_status(request: Request, user: str = Depends(current_user)):
+    return controller.status(host=_req_host(request))
 
 
 @app.post("/api/controller")
@@ -324,7 +330,8 @@ def controller_disconnect(user: str = Depends(require_operator)):
 
 
 @app.post("/api/controller/sync")
-def controller_sync(user: str = Depends(require_operator)):
+def controller_sync(request: Request, user: str = Depends(require_operator)):
+    controller.note_gateway_host(_req_host(request))   # ensure the derived URL is known
     try:
         return controller.sync()
     except controller.ControllerError as e:

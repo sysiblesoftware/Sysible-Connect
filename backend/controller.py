@@ -51,15 +51,43 @@ _SSO_SECRET = os.getenv("SYSIBLE_SSO_SHARED_SECRET", "")
 # (the SSRF guard blocks loopback, and in the compose stack services address each other
 # by name anyway).
 _LOCAL_CONTROLLER_URL = os.getenv("SYSIBLE_CONNECT_CONTROLLER_URL", "").strip()
+# The Controller backend API port (published on the same host in the SLOP stack).
+_CONTROLLER_PORT = (os.getenv("SYSIBLE_CONNECT_CONTROLLER_PORT", "9000").strip() or "9000")
+# In SSO mode, if no explicit Controller URL is configured, DERIVE one from the host the
+# browser reached Connect on (the gateway host) + the Controller's port — so auto-attach
+# "just works" behind the gateway with zero extra config, exactly like when Connect was
+# embedded in the Controller. Cached once a request tells us the host (status() runs on
+# page load), so the tokenless terminal/sync paths — which have no request — can use it.
+_DERIVED_CONTROLLER_URL = None
+
+
+def note_gateway_host(host: str) -> None:
+    """Record the host the browser reached Connect on so SSO auto-attach can target the
+    local Controller at https://<host>:<port> when no explicit SYSIBLE_CONNECT_CONTROLLER_URL
+    is set. No-op unless SSO trust is on and no explicit URL is configured."""
+    global _DERIVED_CONTROLLER_URL
+    if _LOCAL_CONTROLLER_URL or not (_TRUST_GATEWAY and _SSO_SECRET):
+        return
+    h = (host or "").strip()
+    if not h:
+        return
+    # Strip a :port from a host:port form; leave an IPv6 literal ([..]) alone.
+    if not h.startswith("[") and ":" in h:
+        h = h.rsplit(":", 1)[0]
+    _DERIVED_CONTROLLER_URL = f"https://{h}:{_CONTROLLER_PORT}"
 
 
 def _sso_cfg() -> dict | None:
-    """The auto-attach config for the local Controller when SSO trust mode is fully set
-    up (trust on + shared secret + a Controller URL), else None. Marked sso=True so the
-    request path authenticates with the shared secret instead of a machine API key."""
-    if not (_TRUST_GATEWAY and _SSO_SECRET and _LOCAL_CONTROLLER_URL):
+    """The auto-attach config for the local Controller when SSO trust mode is active
+    (trust on + shared secret) AND a Controller URL is known — configured explicitly, or
+    derived from the gateway host. Marked sso=True so the request path authenticates with
+    the shared secret instead of a machine API key."""
+    if not (_TRUST_GATEWAY and _SSO_SECRET):
         return None
-    return {"base_url": _normalize(_LOCAL_CONTROLLER_URL), "sso": True, "tls_cert": ""}
+    url = _LOCAL_CONTROLLER_URL or (_DERIVED_CONTROLLER_URL or "")
+    if not url:
+        return None
+    return {"base_url": _normalize(url), "sso": True, "tls_cert": ""}
 
 
 class ControllerError(Exception):
@@ -206,8 +234,12 @@ def _save(cfg: dict) -> None:
     _write_nofollow(_CFG, json.dumps(out).encode())
 
 
-def status() -> dict:
-    """Public connection state — never includes the API key."""
+def status(host: str = None) -> dict:
+    """Public connection state — never includes the API key. `host` (the gateway host
+    the browser reached Connect on) lets SSO auto-attach derive the local Controller URL
+    when none is configured."""
+    if host:
+        note_gateway_host(host)
     cfg = _load()
     # Connected when we hold a machine API key (manual attach) OR we're auto-attached to
     # the local Controller over SSO (shared-secret transport, no key needed).
