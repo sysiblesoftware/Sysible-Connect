@@ -51,6 +51,12 @@ services:
       # the matching shared secret (see SLOP docs/SSO.md).
       SYSIBLE_CONNECT_TRUST_GATEWAY_AUTH: "${SYSIBLE_CONNECT_TRUST_GATEWAY_AUTH:-0}"
       SYSIBLE_SSO_SHARED_SECRET: "${SYSIBLE_SSO_SHARED_SECRET:-}"
+      # In the SLOP stack, auto-attach to the LOCAL Controller (no manual "log in to the
+      # Controller" step, no machine API key): Connect proves it's a trusted co-located
+      # app with the shared secret above. Point this at the Controller's backend API by
+      # service name / LAN address (NOT localhost — the SSRF guard blocks loopback, and
+      # compose services address each other by name). Empty (standalone) → manual attach.
+      SYSIBLE_CONNECT_CONTROLLER_URL: "${SYSIBLE_CONNECT_CONTROLLER_URL:-}"
     restart: unless-stopped
 
 volumes:

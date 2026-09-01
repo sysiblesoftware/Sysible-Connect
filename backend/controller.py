@@ -36,6 +36,31 @@ from . import secret
 _CFG = DATA_DIR / "controller.json"
 _CA = DATA_DIR / "controller_ca.pem"
 
+# ---------------------------------------------------- SLOP SSO auto-attach
+# In the SLOP stack every app runs behind the gateway on one host, and the gateway
+# stamps X-Sysible-Auth (the shared secret) on every request. When Connect is in SSO
+# trust mode AND told where the local Controller's backend API is, it attaches to it
+# AUTOMATICALLY — no operator "log in to the Controller" step and no machine API key to
+# provision: Connect proves it's a trusted co-located app by presenting that same shared
+# secret to the Controller (which trusts the gateway secret on its fleet/remote routes).
+# A manually-saved connection still wins, so standalone Connect is unchanged.
+_TRUST_GATEWAY = os.getenv("SYSIBLE_CONNECT_TRUST_GATEWAY_AUTH", "0") == "1"
+_SSO_SECRET = os.getenv("SYSIBLE_SSO_SHARED_SECRET", "")
+# The local Controller backend API (e.g. https://sysible-controller:9000). Set by the
+# SLOP orchestrator; use the Controller's service name / LAN address, not localhost
+# (the SSRF guard blocks loopback, and in the compose stack services address each other
+# by name anyway).
+_LOCAL_CONTROLLER_URL = os.getenv("SYSIBLE_CONNECT_CONTROLLER_URL", "").strip()
+
+
+def _sso_cfg() -> dict | None:
+    """The auto-attach config for the local Controller when SSO trust mode is fully set
+    up (trust on + shared secret + a Controller URL), else None. Marked sso=True so the
+    request path authenticates with the shared secret instead of a machine API key."""
+    if not (_TRUST_GATEWAY and _SSO_SECRET and _LOCAL_CONTROLLER_URL):
+        return None
+    return {"base_url": _normalize(_LOCAL_CONTROLLER_URL), "sso": True, "tls_cert": ""}
+
 
 class ControllerError(Exception):
     pass
@@ -155,9 +180,10 @@ def _load() -> dict:
     try:
         d = json.loads(_read_nofollow(_CFG))
     except (OSError, ValueError, json.JSONDecodeError):
-        return {}
+        # No manually-saved connection → auto-attach to the local Controller in SSO mode.
+        return _sso_cfg() or {}
     if not isinstance(d, dict):
-        return {}
+        return _sso_cfg() or {}
     # API key is stored encrypted (api_key_enc); decrypt into memory. A legacy
     # plaintext api_key is tolerated and re-encrypted on the next save.
     if d.get("api_key_enc"):
@@ -183,11 +209,18 @@ def _save(cfg: dict) -> None:
 def status() -> dict:
     """Public connection state — never includes the API key."""
     cfg = _load()
-    return {"connected": bool(cfg.get("base_url") and cfg.get("api_key")),
+    # Connected when we hold a machine API key (manual attach) OR we're auto-attached to
+    # the local Controller over SSO (shared-secret transport, no key needed).
+    connected = bool(cfg.get("base_url") and (cfg.get("api_key") or cfg.get("sso")))
+    return {"connected": connected,
             "base_url": cfg.get("base_url", ""),
+            # True when the connection is the automatic local SSO attach (no manual
+            # Controller login) rather than a saved URL + key.
+            "sso": bool(cfg.get("sso")),
             # When present, terminals/exec run AS this operator's account on the hosts
             # (run-as attribution). Absent = api-key-only connect, so they run as the
-            # Controller's default account.
+            # Controller's default account. In SSO mode the acting identity is forwarded
+            # per request from the gateway headers instead.
             "run_as": cfg.get("admin_user", "")}
 
 
@@ -350,17 +383,34 @@ def _fetch_server_cert(base_url: str) -> str:
 
 
 # ------------------------------------------------------------- HTTP transport
-def _request(cfg: dict, method: str, path: str, *, json_body=None, timeout=20):
-    """One Controller API call with the machine key; trust-on-first-use the
-    self-signed cert on a verify failure (pin it into cfg and retry once)."""
+def _request(cfg: dict, method: str, path: str, *, json_body=None, timeout=20, identity=None):
+    """One Controller API call; trust-on-first-use the self-signed cert on a verify
+    failure (pin it into cfg and retry once).
+
+    Auth is one of two modes:
+      * SSO auto-attach (cfg['sso']): present the SLOP shared secret as X-Sysible-Auth,
+        which the local Controller trusts on its fleet/remote routes — no machine key.
+        `identity` = {"user","role"} forwards the acting operator (from the gateway
+        headers on the incoming request) for attribution/run-as.
+      * Manual attach: the stored machine API key (X-API-Key), plus the admin identity
+        token when we hold one (username/password connect)."""
     url = cfg["base_url"] + path
-    headers = {"X-API-Key": cfg["api_key"]}
-    # Attributed "run-as" identity: when we hold an admin token (username/password
-    # connect), send it so the Controller runs terminals/exec AS that operator's
-    # own account with their sudo — not as the SSH login user (root). Without it the
-    # Controller falls back to the tokenless root path.
-    if cfg.get("admin_token"):
-        headers["X-Sysible-Admin-Token"] = cfg["admin_token"]
+    if cfg.get("sso"):
+        headers = {"X-Sysible-Auth": _SSO_SECRET}
+        # Forward the acting operator so the Controller attributes/runs-as them, exactly
+        # as the gateway would. Best-effort — the shared secret is what authenticates.
+        if identity and identity.get("user"):
+            headers["X-Sysible-User"] = identity["user"]
+            if identity.get("role"):
+                headers["X-Sysible-Role"] = identity["role"]
+    else:
+        headers = {"X-API-Key": cfg["api_key"]}
+        # Attributed "run-as" identity: when we hold an admin token (username/password
+        # connect), send it so the Controller runs terminals/exec AS that operator's
+        # own account with their sudo — not as the SSH login user (root). Without it the
+        # Controller falls back to the tokenless root path.
+        if cfg.get("admin_token"):
+            headers["X-Sysible-Admin-Token"] = cfg["admin_token"]
     verify = _ca_path(cfg.get("tls_cert", "")) or True
     try:
         return _do_request(method, url, headers=headers, json_body=json_body,
@@ -420,7 +470,10 @@ def sync() -> dict:
     if not cfg.get("base_url"):
         raise ControllerError("No Controller connected.")
     ssh_hosts, agents = _fleet(cfg)
-    _save(cfg)   # persist a cert refreshed by TOFU during the calls
+    if not cfg.get("sso"):
+        _save(cfg)   # persist a cert refreshed by TOFU during the calls
+    # (In SSO auto-attach mode we don't persist — the env stays authoritative for the
+    #  local Controller URL, and the cert re-pins cheaply on each sync.)
 
     imported = skipped = 0
     online_n = offline_n = 0
