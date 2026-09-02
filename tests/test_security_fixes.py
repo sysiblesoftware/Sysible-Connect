@@ -276,3 +276,53 @@ def test_oversized_body_rejected_413(client):
     r = client.post("/api/login", content=b"x" * 16,
                     headers={"Content-Type": "application/json", "Content-Length": str(huge)})
     assert r.status_code == 413
+
+
+# ---- audit trail -----------------------------------------------------------
+def test_audit_records_actions_and_is_readable(auth_client):
+    # A recorded action shows up newest-first with actor/action/target.
+    auth_client.post("/api/hosts", json={"name": "h1", "address": "10.0.0.1",
+                                         "user": "root", "port": 22, "password": "s3cret-pw"})
+    r = auth_client.get("/api/audit")
+    assert r.status_code == 200
+    entries = r.json()["entries"]
+    actions = [e["action"] for e in entries]
+    assert "host_add" in actions and "login" in actions
+    assert entries[0]["id"] > entries[-1]["id"]          # newest first
+    add = next(e for e in entries if e["action"] == "host_add")
+    assert add["target"] == "h1" and add["actor"] == "admin"
+
+
+def test_audit_never_records_secrets(auth_client):
+    # The host credential, and a fleet command's OUTPUT, must never reach the trail.
+    auth_client.post("/api/hosts", json={"name": "h2", "address": "10.0.0.2",
+                                         "user": "root", "port": 22,
+                                         "password": "TOP-SECRET-PASSWORD",
+                                         "key": "-----BEGIN OPENSSH PRIVATE KEY-----"})
+    blob = auth_client.get("/api/audit").text
+    assert "TOP-SECRET-PASSWORD" not in blob
+    assert "BEGIN OPENSSH PRIVATE KEY" not in blob
+
+
+def test_audit_since_id_cursor(auth_client):
+    first = auth_client.get("/api/audit").json()["entries"]
+    top = first[0]["id"]
+    auth_client.post("/api/hosts", json={"name": "h3", "address": "10.0.0.3",
+                                         "user": "root", "port": 22})
+    fresh = auth_client.get("/api/audit", params={"since_id": top}).json()["entries"]
+    assert fresh and all(e["id"] > top for e in fresh)
+
+
+def test_audit_requires_a_session(client):
+    assert client.get("/api/audit").status_code == 401
+
+
+def test_audit_write_failure_never_breaks_the_action(auth_client, monkeypatch):
+    # An audit write is a record of the work, not part of it: if it fails the user's
+    # action must still succeed.
+    import backend.audit as audit_mod
+    monkeypatch.setattr(audit_mod, "_read_all", lambda: (_ for _ in ()).throw(OSError("boom")))
+    monkeypatch.setattr(audit_mod, "_next_id", None)
+    r = auth_client.post("/api/hosts", json={"name": "h4", "address": "10.0.0.4",
+                                             "user": "root", "port": 22})
+    assert r.status_code == 200

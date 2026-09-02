@@ -19,7 +19,7 @@ from pathlib import Path
 
 from fastapi import File, Form, UploadFile
 
-from . import auth, controller, files, fleet, hosts, terminals
+from . import audit, auth, controller, files, fleet, hosts, terminals
 
 COOKIE = "sysible_connect_session"
 _DIST = Path(__file__).resolve().parent.parent / "webgui" / "frontend" / "dist"
@@ -249,6 +249,7 @@ def login(request: Request, response: Response, body: dict = Body(...)):
     now = time.time()
     st = _LOGIN_FAIL.get(key)
     if st and st.get("until", 0) > now:
+        audit.log(user or "(unknown)", "login_throttled", detail=f"ip={_client_ip(request)}", ok=False)
         raise HTTPException(status_code=429,
                             detail="Too many failed attempts — try again in a few minutes.")
     if not auth.verify(user, pw):
@@ -257,6 +258,7 @@ def login(request: Request, response: Response, body: dict = Body(...)):
         if st["n"] >= _LOGIN_MAX:
             st["until"] = now + _LOGIN_LOCK_S
             st["n"] = 0
+        audit.log(user or "(unknown)", "login_failed", detail=f"ip={_client_ip(request)}", ok=False)
         raise HTTPException(status_code=401, detail="Invalid username or password.")
     _LOGIN_FAIL.pop(key, None)   # clear on success
     token = auth.new_session(user)
@@ -264,12 +266,15 @@ def login(request: Request, response: Response, body: dict = Body(...)):
     # plain HTTP; omitted on a plain-HTTP dev/proxy setup so login still works there.
     response.set_cookie(COOKIE, token, httponly=True, samesite="lax",
                         secure=_is_https(request), max_age=12 * 3600)
+    audit.log(user, "login", detail=f"ip={_client_ip(request)}")
     return {"user": user, "must_change": auth.must_change()}
 
 
 @app.post("/api/logout")
 def logout(request: Request, response: Response):
+    _who = auth.session_user(request.cookies.get(COOKIE)) or gateway_identity(request.headers) or ""
     auth.revoke(request.cookies.get(COOKIE))
+    audit.log(_who, "logout")
     response.delete_cookie(COOKIE)
     return {"ok": True}
 
@@ -293,6 +298,7 @@ def change_password(request: Request, body: dict = Body(...), user: str = Depend
     if len(new) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
     auth.set_password(new)
+    audit.log(user, "password_changed")
     return {"ok": True}
 
 
@@ -310,13 +316,19 @@ def add_host(body: dict = Body(...), user: str = Depends(require_operator)):
             str(body.get("user") or "root").strip(), int(body.get("port") or 22),
             str(body.get("password") or ""), str(body.get("key") or ""))
     except ValueError as e:
+        audit.log(user, "host_add", str(body.get("name") or ""), str(e), ok=False)
         raise HTTPException(status_code=400, detail=str(e))
+    # Identifying metadata only — the credential in the body is never logged.
+    audit.log(user, "host_add", str(body.get("name") or ""),
+              f"{body.get('user') or 'root'}@{body.get('address') or ''}:{body.get('port') or 22}")
     return {"ok": True}
 
 
 @app.delete("/api/hosts/{name}")
 def delete_host(name: str, user: str = Depends(require_operator)):
-    return {"deleted": hosts.delete_host(name)}
+    gone = hosts.delete_host(name)
+    audit.log(user, "host_delete", name, ok=bool(gone))
+    return {"deleted": gone}
 
 
 # ------------------------------------------------------------- file transfer
@@ -349,7 +361,9 @@ async def files_upload(name: str, path: str = Form(...), file: UploadFile = File
     try:
         size = files.upload(name, dest, await file.read())
     except files.FileError as e:
+        audit.log(user, "file_upload", name, f"{dest}: {e}", ok=False)
         raise HTTPException(status_code=400, detail=str(e))
+    audit.log(user, "file_upload", name, f"{dest} ({size} bytes)")
     return {"ok": True, "path": dest, "size": size}
 
 
@@ -397,17 +411,23 @@ def controller_connect(body: dict = Body(...), user: str = Depends(require_opera
     try:
         # Prefer username/password (the friendly path) when provided; else the API key.
         if b.get("username") or b.get("password"):
-            return controller.connect_with_credentials(
+            out = controller.connect_with_credentials(
                 base, str(b.get("username") or "").strip(), str(b.get("password") or ""),
                 str(b.get("totp_code") or "").strip())
-        return controller.connect(base, str(b.get("api_key") or "").strip())
+        else:
+            out = controller.connect(base, str(b.get("api_key") or "").strip())
     except controller.ControllerError as e:
+        audit.log(user, "controller_attach", base, str(e), ok=False)
         raise HTTPException(status_code=400, detail=str(e))
+    # The Controller URL only — the credential used to attach is never logged.
+    audit.log(user, "controller_attach", base)
+    return out
 
 
 @app.delete("/api/controller")
 def controller_disconnect(user: str = Depends(require_operator)):
     controller.disconnect()
+    audit.log(user, "controller_detach")
     return {"connected": False}
 
 
@@ -430,9 +450,13 @@ def fleet_run(body: dict = Body(...), user: str = Depends(require_operator)):
     if not names:
         names = [h["name"] for h in hosts.list_hosts()]
     try:
-        return {"results": fleet.run(command, list(names))}
+        results = fleet.run(command, list(names))
     except ValueError as e:
+        audit.log(user, "fleet_run", ",".join(map(str, names))[:200], str(e), ok=False)
         raise HTTPException(status_code=400, detail=str(e))
+    # The command and which hosts it hit — never the command OUTPUT.
+    audit.log(user, "fleet_run", f"{len(list(names))} host(s)", command[:500])
+    return {"results": results}
 
 
 # ------------------------------------------------------------------ terminal
@@ -463,6 +487,10 @@ async def terminal_ws(ws: WebSocket):
             return
     await ws.accept()
     kind = ws.query_params.get("kind", "local")
+    # A shell was handed out: record who, and to which host. Typed input and session
+    # output are NEVER recorded — only that the session was opened.
+    audit.log(gw or auth.session_user(ws.cookies.get(COOKIE)) or "", "terminal_open",
+              ws.query_params.get("host", "") or kind, f"kind={kind}")
     try:
         cols = int(ws.query_params.get("cols", 80))
         rows = int(ws.query_params.get("rows", 24))
@@ -523,6 +551,16 @@ async def terminal_ws(ws: WebSocket):
 
 
 # --------------------------------------------------------------------- SPA
+@app.get("/api/audit")
+def api_audit(request: Request, limit: int = 100, since_id: int = 0,
+              user: str = Depends(current_user)) -> dict:
+    """Connect's audit trail, newest first. Deliberately readable by ANY signed-in
+    identity including a read-only auditor — oversight is exactly an auditor's job,
+    and the trail carries no secrets. Same {entries:[...]} shape as SLEP and
+    Flashback so Sysible Visualizer aggregates every app with one client."""
+    return {"entries": audit.list_entries(limit, since_id)}
+
+
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
