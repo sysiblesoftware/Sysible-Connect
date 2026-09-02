@@ -28,6 +28,76 @@ app = FastAPI(title="Sysible Connect")
 auth.ensure_admin()
 
 
+# Bound request bodies so an unbounded upload can't exhaust memory: the file-upload
+# route reads the whole body into RAM (await file.read()), so without a cap a single
+# request could OOM the process. 64 MiB default (file transfers to hosts can be
+# sizeable), overridable. Enforced at the ASGI layer against the ACTUAL streamed
+# bytes, not just Content-Length — a Content-Length-only check is trivially bypassed
+# with Transfer-Encoding: chunked. Only HTTP is bounded; the terminal websocket
+# (a different ASGI scope) passes straight through, so live sessions are unaffected.
+_MAX_REQUEST_BYTES = int(os.environ.get("SYSIBLE_CONNECT_MAX_REQUEST_BYTES", str(64 * 1024 * 1024)))
+
+
+class _BodyLimitASGI:
+    def __init__(self, app, max_bytes: int):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        for k, v in scope.get("headers") or []:
+            if k == b"content-length" and v.isdigit() and int(v) > self.max_bytes:
+                return await self._too_large(scope, send)
+        body = bytearray()
+        more_body = True
+        while more_body:
+            message = await receive()
+            if message.get("type") == "http.disconnect":
+                return
+            body += message.get("body", b"")
+            more_body = message.get("more_body", False)
+            if len(body) > self.max_bytes:
+                return await self._too_large(scope, send)
+        sent = False
+
+        async def replay_receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": bytes(body), "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+    async def _too_large(self, scope, send):
+        async def _noop_receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await JSONResponse({"detail": "Request body too large."}, status_code=413)(scope, _noop_receive, send)
+
+
+app.add_middleware(_BodyLimitASGI, max_bytes=_MAX_REQUEST_BYTES)
+
+
+# Defense-in-depth response headers. Connect serves an HTML SPA + a live terminal
+# UI, so clickjacking of the PTY/fleet controls is the real risk — hence
+# frame-ancestors 'none' + X-Frame-Options: DENY. Behind the SLOP gateway these are
+# also stamped at the edge; setting them here protects the standalone/direct-access
+# deploy too. A lone frame-ancestors CSP directive blocks framing WITHOUT restricting
+# the SPA's own resource/websocket loading, so it can't break the console (a strict
+# default-src is deliberately not forced here — that needs a per-build CSP).
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+    if _is_https(request):
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+    return resp
+
+
 # ------------------------------------------------------ SLOP SSO gateway trust
 # When Connect runs behind the SLOP single-sign-on gateway, an upstream Caddy
 # reverse proxy authenticates the browser and injects identity headers on every
@@ -148,9 +218,21 @@ _LOGIN_MAX = 5              # failures before a lockout
 _LOGIN_LOCK_S = 300        # lockout duration
 
 
+def _client_ip(request: Request) -> str:
+    """The real client IP for the login throttle. Behind a reverse proxy (the SLOP
+    gateway, or any front proxy in a standalone deploy) the direct peer is the proxy,
+    which APPENDS the real client to the right of X-Forwarded-For — so the LAST hop is
+    the trusted client. The first hop is client-supplied and spoofable (an attacker
+    could rotate it to dodge the throttle, or forge a victim's IP); take the rightmost.
+    No proxy → the direct peer. Mirrors the SLOP IdP/SLEP client-IP derivation."""
+    xff = (request.headers.get("x-forwarded-for") or "").split(",")[-1].strip()
+    if xff:
+        return xff
+    return request.client.host if request.client else "?"
+
+
 def _throttle_key(request: Request, user: str) -> str:
-    ip = request.client.host if request.client else "?"
-    return f"{ip}:{user.lower()}"
+    return f"{_client_ip(request)}:{user.lower()}"
 
 
 @app.post("/api/login")

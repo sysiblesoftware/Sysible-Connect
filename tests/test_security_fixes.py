@@ -244,3 +244,35 @@ def test_auth_store_refuses_planted_symlink(tmp_path):
         assert victim.read_text() == "{}"   # not overwritten through the link
     finally:
         auth._AUTH_FILE = orig
+
+
+# ---- propagated SLOP-audit fixes -------------------------------------------
+def test_security_headers_present(client):
+    # Every response carries the clickjacking + sniffing + referrer defenses.
+    r = client.get("/api/ping")
+    assert r.headers.get("X-Frame-Options") == "DENY"
+    assert r.headers.get("X-Content-Type-Options") == "nosniff"
+    assert r.headers.get("Referrer-Policy") == "no-referrer"
+    assert "frame-ancestors 'none'" in r.headers.get("Content-Security-Policy", "")
+
+
+def test_throttle_key_uses_trusted_last_xff_hop():
+    # The per-IP login throttle keys on the rightmost X-Forwarded-For hop (the one a
+    # front proxy appends), so a client-injected leftmost entry can't dodge the
+    # throttle or forge a victim's IP.
+    class _Req:
+        def __init__(self, xff, peer):
+            self.headers = {"x-forwarded-for": xff} if xff else {}
+            self.client = type("C", (), {"host": peer})() if peer else None
+
+    assert app_module._client_ip(_Req("1.2.3.4, 10.0.0.9", "172.16.0.1")) == "10.0.0.9"
+    assert app_module._client_ip(_Req("", "192.168.1.5")) == "192.168.1.5"
+    assert app_module._throttle_key(_Req("1.2.3.4, 10.0.0.9", "172.16.0.1"), "Admin") == "10.0.0.9:admin"
+
+
+def test_oversized_body_rejected_413(client):
+    # An oversized Content-Length is refused before the body is read (memory-DoS guard).
+    huge = app_module._MAX_REQUEST_BYTES + 1
+    r = client.post("/api/login", content=b"x" * 16,
+                    headers={"Content-Type": "application/json", "Content-Length": str(huge)})
+    assert r.status_code == 413
