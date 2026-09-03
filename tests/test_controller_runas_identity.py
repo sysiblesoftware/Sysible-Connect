@@ -151,3 +151,52 @@ def test_status_reports_the_sso_operator_as_the_run_as(monkeypatch):
 def test_status_has_no_run_as_without_an_acting_identity(monkeypatch):
     _enable_sso(monkeypatch)
     assert controller.status()["run_as"] == ""
+
+
+# ---- a stalled terminal must not be a blank screen ------------------------
+def _stall_capture(monkeypatch, why):
+    """Controller stand-in whose read long-poll returns no data and a reason."""
+    def _do(method, url, headers=None, json_body=None, verify=None, timeout=None):
+        if url.endswith("/terminal/open"):
+            return _Resp(200, {"session_id": "sess-1", "opened": True, "via": "agent"})
+        if url.endswith("/read"):
+            body = {"data": "", "closed": False}
+            if why:
+                body["waiting"] = why
+            return _Resp(200, body)
+        return _Resp(200, {})
+    monkeypatch.setattr(controller, "_do_request", _do)
+
+
+WHY = ("this host's agent collected the terminal request but has not sent any "
+       "output. Check the agent log: journalctl -u sysible-agent -n 50")
+
+
+def test_a_stalled_terminal_prints_the_reason_instead_of_staying_blank(monkeypatch):
+    _enable_sso(monkeypatch)
+    _stall_capture(monkeypatch, WHY)
+    t = controller.TerminalProxy("web01", identity=ALICE)
+    out = t.read().decode()
+    assert "journalctl -u sysible-agent" in out
+    assert "[sysible]" in out and "\x1b[90m" in out, "shown dimmed, as status not output"
+
+
+def test_the_reason_is_shown_once_not_on_every_poll(monkeypatch):
+    """The read loop polls continuously; repeating the notice would bury the shell
+    under it the moment output finally arrives."""
+    _enable_sso(monkeypatch)
+    _stall_capture(monkeypatch, WHY)
+    t = controller.TerminalProxy("web01", identity=ALICE)
+    assert "[sysible]" in t.read().decode()
+    t._closed = True                      # stop the second call's infinite poll
+    assert t.read() == b""
+
+
+def test_no_reason_means_no_noise(monkeypatch):
+    """A healthy idle shell long-polls forever with nothing to say — it must not
+    have anything written into it."""
+    _enable_sso(monkeypatch)
+    _stall_capture(monkeypatch, None)
+    t = controller.TerminalProxy("web01", identity=ALICE)
+    t._closed = True
+    assert t.read() == b""

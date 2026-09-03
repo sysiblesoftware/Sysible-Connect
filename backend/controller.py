@@ -581,6 +581,8 @@ class TerminalProxy:
         # open): the Controller resolves the run-as identity per request, so a read or
         # write without it would fall back to the default account mid-session.
         self._ident = identity or None
+        # One-shot: a stalled session explains itself once, not on every poll.
+        self._told_waiting = False
         r = _request(self._cfg, "POST", f"/remote/hosts/{host_name}/terminal/open",
                      identity=self._ident)
         if r.status_code == 503:
@@ -616,9 +618,19 @@ class TerminalProxy:
             if body.get("closed"):
                 self._closed = True
             if data:
+                self._told_waiting = True   # real output — never explain again
                 return data.encode("utf-8", "replace")
             if self._closed:
                 return b""
+            # The open only QUEUES work for the host's agent, so a terminal can
+            # connect and then draw nothing at all — a blank pane with a cursor and
+            # no clue whether the agent has not collected the request yet, took it
+            # and went quiet, or is not checking in. The Controller works out which
+            # and says so; show it once, dimmed, instead of an empty screen.
+            why = body.get("waiting")
+            if why and not self._told_waiting:
+                self._told_waiting = True
+                return (f"\r\n\x1b[90m[sysible] {why}\x1b[0m\r\n").encode()
             # idle long-poll returned nothing — poll again (the Controller side waits)
         return b""
 
