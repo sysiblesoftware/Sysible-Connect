@@ -78,5 +78,30 @@ const afterClose = closeLeaf(tree, b.id)
 eq(layout(afterClose).tiles.map((t) => t.spec.title), ['deb-web-1', 'ubuntu-web-1'], 'closing the middle promotes the rest')
 ok(closeLeaf(leaf({ title: 'x' }), 'nope') !== null, 'closing an unknown id leaves the tree alone')
 
+// ---- every in-app URL must respect the base path -------------------------
+// Behind the SLOP gateway this console is served under /connect/, so a URL built
+// from a bare '/' points at the SLOP PORTAL. Popping a terminal out did exactly
+// that: it opened the portal's landing page in a small window and threw the
+// session away. Source lint, because the URL is built from import.meta.env at
+// runtime and cannot be imported here.
+import { readFileSync } from 'node:fs'
+const SRC = new URL('../src/', import.meta.url)
+const read = (f) => readFileSync(new URL(f, SRC), 'utf8')
+
+for (const f of ['Workspace.jsx', 'Terminal.jsx', 'api.js']) {
+  const src = read(f)
+  const bad = [...src.matchAll(/window\.open\(\s*[`'"]\//g)]
+  ok(bad.length === 0, `${f} builds no window.open() URL from a bare '/'`)
+}
+ok(/window\.open\(`\$\{BASE\}\//.test(read('Workspace.jsx')),
+   'the pop-out URL is built from BASE')
+ok(/import \{[^}]*\bBASE\b[^}]*\} from '\.\/api\.js'/.test(read('Workspace.jsx')),
+   'and BASE is actually imported')
+// A blocked popup must not destroy the pane it was going to move.
+const po = read('Workspace.jsx')
+const i = po.indexOf('const popOut')
+ok(/if \(!win\)/.test(po.slice(i, i + 1200)),
+   'a blocked pop-up leaves the terminal where it is instead of closing it')
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed')
 process.exit(failed ? 1 : 0)

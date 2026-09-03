@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { api, apiUrl } from './api.js'
+import { api, apiUrl, BASE } from './api.js'
 import Terminal from './Terminal.jsx'
 import Logo from './Logo.jsx'
 import { IconSplitRight, IconSplitDown, IconPopout, IconClose, IconSave, IconSun, IconMoon } from './icons.jsx'
@@ -140,7 +140,19 @@ export default function Workspace({ me, onLogout }) {
     if (!sp) return
     const p = new URLSearchParams({ popout: '1', kind: sp.kind, title: sp.title || sp.host || 'local' })
     if (sp.host) p.set('host', sp.host)
-    window.open('/?' + p.toString(), 'sysible_term_' + space.active, 'width=900,height=560')
+    // BASE, not '/'. Behind the SLOP gateway this console is served under /connect/,
+    // so a bare '/' is the SLOP PORTAL — popping a terminal out opened the portal's
+    // landing page in a little window and threw the session away. Standalone Connect
+    // builds with BASE '', where this is unchanged.
+    const win = window.open(`${BASE}/?${p.toString()}`,
+                            'sysible_term_' + space.active, 'width=900,height=560')
+    // Only give up the tile once the window really opened. A blocked popup used to
+    // close the pane anyway, so the session was destroyed and nothing replaced it.
+    if (!win) {
+      alert('Your browser blocked the pop-out window. Allow pop-ups for this site '
+            + 'and try again — the terminal has been left where it is.')
+      return
+    }
     closeActive()   // it now lives in the pop-out window
   }
 
