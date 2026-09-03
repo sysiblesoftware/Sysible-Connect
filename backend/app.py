@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 import os
 import threading
 import time
@@ -21,6 +22,27 @@ from pathlib import Path
 from fastapi import File, Form, UploadFile
 
 from . import audit, auth, controller, files, fleet, hosts, terminals
+
+# Server-side trail for websocket refusals. A close before accept() is invisible
+# in the app's own audit log (that is written after accept), so without this a
+# refused terminal leaves no record anywhere on the server either.
+_log = logging.getLogger("sysible.connect")
+
+# A WebSocket close reason is capped at 123 BYTES by RFC 6455. Go over and the
+# frame is invalid — the browser reports a bare code with no reason, which is the
+# blank terminal all over again. Truncate on a UTF-8 boundary so a long asserted
+# role or a future longer message degrades to a shorter sentence instead of
+# silently losing the explanation entirely. The full text goes to the log.
+_WS_REASON_MAX = 123
+
+
+async def _ws_refuse(ws, code: int, reason: str, log_detail: str = ""):
+    """Close a websocket BEFORE accept with a reason the browser can display."""
+    _log.warning("terminal websocket refused (%s): %s", code, log_detail or reason)
+    b = reason.encode("utf-8")
+    if len(b) > _WS_REASON_MAX:
+        reason = b[:_WS_REASON_MAX].decode("utf-8", "ignore")
+    await ws.close(code=code, reason=reason)
 
 COOKIE = "sysible_connect_session"
 _DIST = Path(__file__).resolve().parent.parent / "webgui" / "frontend" / "dist"
@@ -548,8 +570,18 @@ async def terminal_ws(ws: WebSocket):
     # so an exact allowlist match (checked BEFORE accept) stops a sibling *.slop.lan
     # page from opening this PTY over the victim's ambient session. A missing Origin is
     # rejected too — the legitimate SPA always sends one.
+    # Every refusal below carries a REASON. A close before accept() sends no
+    # message frame, so the browser gets nothing to display: the console showed a
+    # terminal pane with a blinking cursor and no text at all, indistinguishable
+    # from a session that opened and stayed quiet. That ambiguity cost days —
+    # "Connect still not working" with no way to tell a refused websocket from a
+    # silent agent. The close frame's reason field crosses to the browser even on
+    # a pre-accept close, so use it.
     if not _ws_origin_ok(ws.headers):
-        await ws.close(code=4403)
+        await _ws_refuse(ws, 4403,
+                         "Refused: this page's origin may not open a terminal. "
+                         "Use the SLOP gateway address.",
+                         log_detail=f"bad Origin {ws.headers.get('origin')!r}")
         return
     # The websocket bypasses current_user, so gateway trust is applied here
     # separately. Caddy forwards the X-Sysible-* headers on the WS upgrade too, so
@@ -559,7 +591,13 @@ async def terminal_ws(ws: WebSocket):
     # so a leftover local cookie can't open a shell after a SLOP sign-out.
     local = None if sso_only() else auth.session_user(ws.cookies.get(COOKIE))
     if not (gw or local):
-        await ws.close(code=4401)
+        await _ws_refuse(ws, 4401,
+                         "Refused: not signed in — the gateway asserted no "
+                         "X-Sysible-User on this upgrade.",
+                         log_detail=(f"no identity (sso_only={sso_only()}, "
+                                     f"user header present="
+                                     f"{bool(ws.headers.get('x-sysible-user'))}, "
+                                     f"secret ok={bool(gateway_identity(ws.headers))})"))
         return
     # Role floor (SSO mode): a terminal is the shell primitive, so a read-only auditor —
     # and any empty/unrecognized asserted role — is denied here, mirroring
@@ -568,7 +606,14 @@ async def terminal_ws(ws: WebSocket):
     if gw:
         role = (ws.headers.get("x-sysible-role") or "").strip().lower()
         if role not in _PRIVILEGED_ROLES:
-            await ws.close(code=4403)
+            # The role is attacker-influenced text; bound it so it can't eat the
+            # whole 123-byte budget and push the actionable part out of the frame.
+            shown = (role or "none")[:24]
+            await _ws_refuse(ws, 4403,
+                             f"Refused: role ({shown}) may not open a terminal; "
+                             "needs operator or superuser (SLOP Administration).",
+                             log_detail=(f"role {role!r} not in "
+                                         f"{sorted(_PRIVILEGED_ROLES)} (user {gw})"))
             return
     await ws.accept()
     kind = ws.query_params.get("kind", "local")

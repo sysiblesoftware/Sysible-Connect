@@ -65,17 +65,32 @@ const Terminal = forwardRef(function Terminal({ spec, onStatus }, ref) {
     try { fit.fit() } catch { /* not laid out yet */ }
 
     let closed = false
+    let opened = false
     const ws = new WebSocket(terminalWsUrl({ kind: spec.kind, host: spec.host, cols: term.cols, rows: term.rows }))
     wsRef.current = ws
     const send = (o) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(o)) }
-    ws.onopen = () => { onStatus?.('open'); term.focus(); send({ t: 'r', cols: term.cols, rows: term.rows }) }
+    ws.onopen = () => { opened = true; onStatus?.('open'); term.focus(); send({ t: 'r', cols: term.cols, rows: term.rows }) }
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data)
       if (m.t === 'o') term.write(m.d)
       else if (m.t === 'exit') { term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n'); onStatus?.('exited') }
       else if (m.t === 'error') { term.write(`\r\n\x1b[31m${m.d}\x1b[0m\r\n`); onStatus?.('error') }
     }
-    ws.onclose = () => { if (!closed) onStatus?.('closed') }
+    // A websocket refused BEFORE accept (bad Origin, no identity, insufficient
+    // role) never delivers a message frame, so the pane used to sit there with a
+    // blinking cursor and no text — identical to a session that opened and stayed
+    // quiet, and impossible to tell apart. The close frame's reason DOES arrive,
+    // so show it. Never leave the operator looking at an empty terminal.
+    ws.onclose = (e) => {
+      if (closed) return
+      onStatus?.('closed')
+      if (e.reason) term.write(`\r\n\x1b[31m${e.reason}\x1b[0m\r\n`)
+      else if (!opened) term.write(
+        '\r\n\x1b[31mThe connection was refused before the session started' +
+        (e.code ? ` (code ${e.code})` : '') +
+        '.\x1b[0m\r\n\x1b[90mCheck the Connect log: docker logs sysible-connect\x1b[0m\r\n')
+      else term.write('\r\n\x1b[90m[connection closed]\x1b[0m\r\n')
+    }
 
     const dataSub = term.onData((d) => send({ t: 'i', d }))
     const resizeSub = term.onResize(({ cols, rows }) => send({ t: 'r', cols, rows }))
