@@ -202,6 +202,22 @@ def gateway_identity(headers) -> str | None:
     return user or None
 
 
+def acting_identity(headers) -> dict | None:
+    """The acting operator to forward to the Controller as the run-as identity, or
+    None when there is no gateway-asserted one (standalone Connect, or a request that
+    can't present the shared secret).
+
+    Built from the SAME trust check as gateway_identity, so a browser can never put
+    its own name in here: without the secret both are None. The Controller re-checks
+    the secret on its side before honoring the headers — this is a relay of a
+    verified identity, not a new assertion.
+    """
+    user = gateway_identity(headers)
+    if not user:
+        return None
+    return {"user": user, "role": gateway_role(headers) or ""}
+
+
 def gateway_role(headers) -> str | None:
     """The gateway-asserted role (lower-cased) ONLY when SSO trust mode is active and
     the request provably came through the gateway; otherwise None. Standalone Connect
@@ -462,7 +478,10 @@ def _req_host(request) -> str:
 
 @app.get("/api/controller")
 def controller_status(request: Request, user: str = Depends(current_user)):
-    return controller.status(host=_req_host(request))
+    # Pass the acting operator so an SSO attach reports the real run-as instead of
+    # "no run-as" (under SSO the identity is per-request, never stored).
+    return controller.status(host=_req_host(request),
+                             identity=acting_identity(request.headers))
 
 
 @app.post("/api/controller")
@@ -503,7 +522,8 @@ def controller_sync(request: Request, user: str = Depends(require_operator)):
 
 # ---------------------------------------------------------------- fleet actions
 @app.post("/api/fleet/run")
-def fleet_run(body: dict = Body(...), user: str = Depends(require_operator)):
+def fleet_run(request: Request, body: dict = Body(...),
+              user: str = Depends(require_operator)):
     """Run one command across hosts (default: all). Uses the terminal transport, so
     it reaches agent, SSH, and local hosts alike. Returns per-host output."""
     command = str(body.get("command") or "")
@@ -511,7 +531,8 @@ def fleet_run(body: dict = Body(...), user: str = Depends(require_operator)):
     if not names:
         names = [h["name"] for h in hosts.list_hosts()]
     try:
-        results = fleet.run(command, list(names))
+        results = fleet.run(command, list(names),
+                            identity=acting_identity(request.headers))
     except ValueError as e:
         audit.log(user, "fleet_run", ",".join(map(str, names))[:200], str(e), ok=False)
         raise HTTPException(status_code=400, detail=str(e))
@@ -572,7 +593,11 @@ async def terminal_ws(ws: WebSocket):
         # with no inbound SSH); a locally-added host uses direct SSH.
         kind = "controller" if host.get("source") == "controller" else "ssh"
     try:
-        sess = terminals.open_session(kind, host=host, cols=cols, rows=rows)
+        # Forward the signed-in operator so the shell runs AS their account on the
+        # host (with their sudo) and the Controller attributes it to them, instead of
+        # every SSO terminal landing as the Controller's default account.
+        sess = terminals.open_session(kind, host=host, cols=cols, rows=rows,
+                                      identity=acting_identity(ws.headers))
     except Exception as e:  # noqa: BLE001 — surface the connect error to the terminal
         await ws.send_json({"t": "error", "d": str(e)})
         await ws.close()

@@ -204,16 +204,21 @@ class SshSession:
             pass
 
 
-def open_session(kind: str, *, host: dict | None = None, cols: int = 80, rows: int = 24):
+def open_session(kind: str, *, host: dict | None = None, cols: int = 80, rows: int = 24,
+                 identity: dict | None = None):
     """Factory: 'local' → a server shell; 'ssh' → direct SSH to `host`;
     'controller' → a shell on a Controller-managed host, proxied THROUGH the
     connected Controller (agent PTY or its SSH key), so no local credential and no
-    inbound SSH to the host are needed."""
+    inbound SSH to the host are needed.
+
+    `identity` is the acting operator ({"user","role"}) for the Controller-proxied
+    kind, so the remote shell runs as their account and is attributed to them. Local
+    and direct-SSH sessions already run as a known account, so they ignore it."""
     if kind == "controller":
         if not host or not host.get("name"):
             raise ValueError("A Controller terminal needs a host.")
         from . import controller   # lazy: local shells don't need requests
-        return controller.TerminalProxy(str(host["name"]), cols, rows)
+        return controller.TerminalProxy(str(host["name"]), cols, rows, identity=identity)
     if kind == "ssh":
         if not host:
             raise ValueError("An SSH terminal needs a host.")

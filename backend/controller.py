@@ -234,26 +234,34 @@ def _save(cfg: dict) -> None:
     _write_nofollow(_CFG, json.dumps(out).encode())
 
 
-def status(host: str = None) -> dict:
+def status(host: str = None, identity: dict = None) -> dict:
     """Public connection state — never includes the API key. `host` (the gateway host
     the browser reached Connect on) lets SSO auto-attach derive the local Controller URL
-    when none is configured."""
+    when none is configured. `identity` is the acting operator from the gateway headers
+    on THIS request, used to report the run-as under SSO."""
     if host:
         note_gateway_host(host)
     cfg = _load()
     # Connected when we hold a machine API key (manual attach) OR we're auto-attached to
     # the local Controller over SSO (shared-secret transport, no key needed).
     connected = bool(cfg.get("base_url") and (cfg.get("api_key") or cfg.get("sso")))
+    # Who terminals/exec run AS on the hosts (that account + its sudo), and who the
+    # Controller attributes them to.
+    #   * manual username/password attach -> the saved admin_user (a stored token),
+    #   * SSO auto-attach -> the operator on THIS request, forwarded per call from the
+    #     gateway headers (there is no stored identity, and there must not be one: the
+    #     run-as has to follow whoever is signed in, not whoever attached).
+    # It used to read admin_user only, which is never set under SSO, so the console
+    # showed "API-key connect (no run-as)" for a signed-in operator on an SSO attach.
+    run_as = cfg.get("admin_user", "")
+    if not run_as and cfg.get("sso") and identity:
+        run_as = (identity.get("user") or "")
     return {"connected": connected,
             "base_url": cfg.get("base_url", ""),
             # True when the connection is the automatic local SSO attach (no manual
             # Controller login) rather than a saved URL + key.
             "sso": bool(cfg.get("sso")),
-            # When present, terminals/exec run AS this operator's account on the hosts
-            # (run-as attribution). Absent = api-key-only connect, so they run as the
-            # Controller's default account. In SSO mode the acting identity is forwarded
-            # per request from the gateway headers instead.
-            "run_as": cfg.get("admin_user", "")}
+            "run_as": run_as}
 
 
 def connect_with_credentials(base_url: str, username: str, password: str, totp_code: str = "") -> dict:
@@ -564,12 +572,17 @@ class TerminalProxy:
 
     kind = "controller"
 
-    def __init__(self, host_name: str, cols: int = 80, rows: int = 24):
+    def __init__(self, host_name: str, cols: int = 80, rows: int = 24, identity: dict = None):
         self._cfg = _load()
         if not self._cfg.get("base_url"):
             raise ControllerError("No Controller connected.")
         self._closed = False
-        r = _request(self._cfg, "POST", f"/remote/hosts/{host_name}/terminal/open")
+        # The acting operator, forwarded on EVERY call in this session (not just the
+        # open): the Controller resolves the run-as identity per request, so a read or
+        # write without it would fall back to the default account mid-session.
+        self._ident = identity or None
+        r = _request(self._cfg, "POST", f"/remote/hosts/{host_name}/terminal/open",
+                     identity=self._ident)
         if r.status_code == 503:
             raise ControllerError("This host's agent isn't checking in right now — try again once it's online.")
         if r.status_code in (401, 403):
@@ -590,7 +603,8 @@ class TerminalProxy:
     def read(self, n: int = 65536) -> bytes:
         while not self._closed:
             try:
-                r = _request(self._cfg, "GET", f"/remote/terminal/{self._sid}/read", timeout=60)
+                r = _request(self._cfg, "GET", f"/remote/terminal/{self._sid}/read",
+                             timeout=60, identity=self._ident)
             except ControllerError:
                 self._closed = True
                 return b""
@@ -614,7 +628,8 @@ class TerminalProxy:
         if self._closed:
             return b""
         try:
-            r = _request(self._cfg, "GET", f"/remote/terminal/{self._sid}/read", timeout=60)
+            r = _request(self._cfg, "GET", f"/remote/terminal/{self._sid}/read",
+                         timeout=60, identity=self._ident)
         except ControllerError:
             self._closed = True
             return b""
@@ -629,14 +644,16 @@ class TerminalProxy:
     def write(self, data: bytes):
         try:
             _request(self._cfg, "POST", f"/remote/terminal/{self._sid}/write",
-                     json_body={"data": data.decode("utf-8", "replace")})
+                     json_body={"data": data.decode("utf-8", "replace")},
+                     identity=self._ident)
         except ControllerError:
             self._closed = True
 
     def resize(self, cols: int, rows: int):
         try:
             _request(self._cfg, "POST", f"/remote/terminal/{self._sid}/resize",
-                     json_body={"cols": int(cols), "rows": int(rows)})
+                     json_body={"cols": int(cols), "rows": int(rows)},
+                     identity=self._ident)
         except ControllerError:
             pass
 
@@ -646,6 +663,7 @@ class TerminalProxy:
     def close(self):
         self._closed = True
         try:
-            _request(self._cfg, "POST", f"/remote/terminal/{self._sid}/close")
+            _request(self._cfg, "POST", f"/remote/terminal/{self._sid}/close",
+                     identity=self._ident)
         except ControllerError:
             pass

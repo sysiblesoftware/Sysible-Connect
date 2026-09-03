@@ -18,13 +18,13 @@ _CAPTURE_S = 8.0        # per-host output window
 _MAX_OUT = 8000         # trim captured output per host
 
 
-def _run_one(name: str, command: str) -> dict:
+def _run_one(name: str, command: str, identity: dict | None = None) -> dict:
     h = host_store.get_host(name)
     if not h:
         return {"name": name, "ok": False, "output": "host not found"}
     kind = "controller" if h.get("source") == "controller" else "ssh"
     try:
-        sess = terminals.open_session(kind, host=h)
+        sess = terminals.open_session(kind, host=h, identity=identity)
     except Exception as e:  # noqa: BLE001 — surface the connect error per host
         return {"name": name, "ok": False, "output": str(e)}
     out = bytearray()
@@ -45,11 +45,14 @@ def _run_one(name: str, command: str) -> dict:
     return {"name": name, "ok": True, "output": out.decode("utf-8", "replace")[-_MAX_OUT:]}
 
 
-def run(command: str, names) -> list:
+def run(command: str, names, identity: dict | None = None) -> list:
+    """Run `command` on each named host. `identity` is the acting operator, forwarded
+    to the Controller for the proxied hosts so each command runs as their account and
+    the Controller's audit trail names them rather than the default account."""
     if not (command or "").strip():
         raise ValueError("A command is required.")
     names = [n for n in (names or []) if n]
     if not names:
         return []
     with ThreadPoolExecutor(max_workers=12) as ex:
-        return list(ex.map(lambda n: _run_one(n, command), names))
+        return list(ex.map(lambda n: _run_one(n, command, identity), names))

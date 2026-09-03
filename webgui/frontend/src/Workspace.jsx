@@ -209,10 +209,18 @@ export default function Workspace({ me, onLogout }) {
                 <span className="side-host-open" title={ctrl.base_url}><span className="dot ok" /> {ctrl.base_url.replace(/^https?:\/\//, '')}</span>
                 <button className="side-host-del" title="Disconnect" onClick={disconnectController}>✕</button>
               </div>
+              {/* Who terminals & commands run as on each host. Under SSO this is the
+                  signed-in SLOP operator, forwarded per request — so the fallback copy
+                  must not tell an SSO user to "reconnect with a username & password":
+                  there is nothing to reconnect, and SLOP is the only door. */}
               <div className="side-runas" title={ctrl.run_as
                 ? `Terminals & commands run as “${ctrl.run_as}” on each host (that account + its sudo), and are attributed to it in the Controller's audit log.`
-                : 'Connected with an API key only — terminals run as the Controller’s default account. Reconnect with a username & password to run as your own account.'}>
-                {ctrl.run_as ? <>runs as <b>{ctrl.run_as}</b></> : 'API-key connect (no run-as)'}
+                : ctrl.sso
+                  ? 'Signed in through SLOP, but this account isn’t provisioned on the Controller yet, so terminals run as the Controller’s default account. Add it in SLOP Administration → Accounts.'
+                  : 'Connected with an API key only — terminals run as the Controller’s default account. Reconnect with a username & password to run as your own account.'}>
+                {ctrl.run_as
+                  ? <>runs as <b>{ctrl.run_as}</b></>
+                  : (ctrl.sso ? 'no run-as (not provisioned)' : 'API-key connect (no run-as)')}
               </div>
             </>
           : <div className="side-empty">Not connected.</div>}
