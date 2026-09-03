@@ -4,7 +4,7 @@ import Terminal from './Terminal.jsx'
 import Logo from './Logo.jsx'
 import { IconSplitRight, IconSplitDown, IconPopout, IconClose, IconSave, IconSun, IconMoon } from './icons.jsx'
 import { getTheme, toggleTheme } from './theme.js'
-import { leaf, splitLeaf, closeLeaf, setRatio, firstLeafId, layout } from './layout.js'
+import { leaf, splitLeaf, closeLeaf, setRatio, firstLeafId, layout, dropTarget } from './layout.js'
 
 let _ws = 0
 const newWorkspace = (spec) => {
@@ -64,11 +64,17 @@ export default function Workspace({ me, onLogout }) {
   const patch = (fn) => setSpaces((s) => s.map((w, i) => (i === cur ? fn(w) : w)))
   const space = spaces[cur]
 
-  const openTerminal = (spec) => {
+  // Open a host. `at` (from a drop on a tile's edge) says WHERE: which pane to split
+  // and in which direction. Without it every host landed to the right of the active
+  // pane, which meant two different hosts could never be stacked vertically — the
+  // layout tree supported 'col' all along, nothing could ask for it.
+  const openTerminal = (spec, at = null) => {
     const nl = leaf(spec)
     patch((w) => {
       if (!w.root) return { ...w, root: nl, active: nl.id }
-      return { ...w, root: splitLeaf(w.root, w.active || firstLeafId(w.root), 'row', nl), active: nl.id }
+      const target = at?.id || w.active || firstLeafId(w.root)
+      return { ...w, root: splitLeaf(w.root, target, at?.dir || 'row', nl, at?.before || false),
+               active: nl.id }
     })
   }
   const splitActive = (dir) => {
@@ -79,7 +85,10 @@ export default function Workspace({ me, onLogout }) {
 
   // ---- drag a host from the sidebar onto the stage to open its terminal ----
   const DND_TYPE = 'application/x-sysible-host'
-  const [dragOver, setDragOver] = useState(false)
+  // The pane+edge the pointer is over, so the drop is previewed before it happens.
+  const [dropAt, setDropAt] = useState(null)
+  const [dropAtEmpty, setDropAtEmpty] = useState(false)
+  const dragOver = !!dropAt || dropAtEmpty
   const onHostDragStart = (e, spec) => {
     try {
       e.dataTransfer.setData(DND_TYPE, JSON.stringify(spec))
@@ -87,18 +96,36 @@ export default function Workspace({ me, onLogout }) {
       e.dataTransfer.effectAllowed = 'copy'
     } catch { /* dnd unavailable */ }
   }
+  // Where in the stage (as a %) the pointer is, so the drop target can be resolved
+  // against the same rects the tiles are laid out with.
+  const stagePct = (e) => {
+    const r = stageRef.current?.getBoundingClientRect()
+    if (!r || !r.width || !r.height) return null
+    return { x: ((e.clientX - r.left) / r.width) * 100, y: ((e.clientY - r.top) / r.height) * 100 }
+  }
   const onStageDragOver = (e) => {
-    if (Array.from(e.dataTransfer.types || []).includes(DND_TYPE)) {
-      e.preventDefault(); e.dataTransfer.dropEffect = 'copy'
-      if (!dragOver) setDragOver(true)
-    }
+    if (!Array.from(e.dataTransfer.types || []).includes(DND_TYPE)) return
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy'
+    const p = stagePct(e)
+    const at = p && space.root ? dropTarget(space.root, p.x, p.y) : null
+    setDropAtEmpty(!space.root)
+    setDropAt(at)
   }
   const onStageDrop = (e) => {
-    e.preventDefault(); setDragOver(false)
+    e.preventDefault()
+    const at = dropAt
+    setDropAt(null); setDropAtEmpty(false)
     try {
       const spec = JSON.parse(e.dataTransfer.getData(DND_TYPE))
-      if (spec && (spec.kind === 'local' || spec.host)) openTerminal(spec)
+      if (spec && (spec.kind === 'local' || spec.host)) openTerminal(spec, at)
     } catch { /* not a host drag */ }
+  }
+  const onStageDragLeave = (e) => {
+    // Only clear when the pointer really left the stage — dragleave also fires when
+    // it crosses between the tiles inside it, and clearing there makes the preview
+    // flicker and the drop land nowhere.
+    if (e.currentTarget.contains(e.relatedTarget)) return
+    setDropAt(null); setDropAtEmpty(false)
   }
   const closeActive = () => space.active && closeTile(space.active)
   // Close a specific pane by id. Closing the last pane leaves the workspace BLANK
@@ -250,7 +277,7 @@ export default function Workspace({ me, onLogout }) {
                 + (p ? ` — ${p.reachable === true ? p.ms + 'ms' : p.reachable === false ? 'unreachable' : p.detail || ''}` : '')
               return (
                 <div key={h.name} className="side-host">
-                  <button className="side-host-open" title={tip + ' — click or drag onto a workspace to open'} draggable
+                  <button className="side-host-open" title={tip + ' — click to open, or drag onto a pane\'s edge to split (top/bottom stacks, left/right sits alongside)'} draggable
                     onDragStart={(e) => onHostDragStart(e, { kind, host: h.name, title: h.name })}
                     onClick={() => openTerminal({ kind, host: h.name, title: h.name })}>
                     <span className={'dot' + dotClass(h)} /> {h.name}
@@ -297,7 +324,11 @@ export default function Workspace({ me, onLogout }) {
               {spaces.length > 1 && <span className="tab-x" onClick={(e) => { e.stopPropagation(); setSpaces((s) => s.filter((_, j) => j !== i)); setCur((c) => Math.max(0, c - (i <= c ? 1 : 0))) }}>✕</span>}
             </button>
           ))}
-          <button className="tab-add" title="New workspace" onClick={() => { setSpaces((s) => [...s, newWorkspace()]); setCur(spaces.length) }}>＋</button>
+          {/* Labelled, not a bare ＋: at the far right of a wide tab bar an unlabeled
+              glyph reads as decoration, and "there's no real way to add a blank
+              workspace" is what that costs. */}
+          <button className="tab-add" title="New workspace (blank)"
+            onClick={() => { setSpaces((s) => [...s, newWorkspace()]); setCur(spaces.length) }}>＋ Workspace</button>
           <div className="tab-tools">
             <button className="tool" title="Split right — new pane beside this one" aria-label="Split right" onClick={() => splitActive('row')}><IconSplitRight /></button>
             <button className="tool" title="Split down — new pane below this one" aria-label="Split down" onClick={() => splitActive('col')}><IconSplitDown /></button>
@@ -306,12 +337,22 @@ export default function Workspace({ me, onLogout }) {
         </div>
 
         <div className={'stage' + (dragOver ? ' drag-over' : '')} ref={stageRef}
-          onDragOver={onStageDragOver} onDragLeave={() => setDragOver(false)} onDrop={onStageDrop}>
+          onDragOver={onStageDragOver} onDragLeave={onStageDragLeave} onDrop={onStageDrop}>
           {!space.root && (
             <div className="stage-empty">
               <div className="stage-empty-card">
                 <div className="stage-empty-title">Empty workspace</div>
-                <div className="stage-empty-sub">Drag a host from the sidebar here to open its terminal — or use <b>＋ Local shell</b>.</div>
+                <div className="stage-empty-sub">
+                  Drag a host from the sidebar here, or open a shell on this machine.
+                </div>
+                <button className="stage-empty-btn"
+                  onClick={() => openTerminal({ kind: 'local', title: 'local' })}>
+                  Open a local shell
+                </button>
+                <div className="stage-empty-hint">
+                  Already have a pane? Drop a host on its <b>top or bottom edge</b> to
+                  stack them, or its <b>left or right edge</b> to sit them side by side.
+                </div>
               </div>
             </div>
           )}
@@ -336,6 +377,13 @@ export default function Workspace({ me, onLogout }) {
                   <div key={d.id} className={'divider ' + d.dir} style={rectStyle(d.rect)}
                     onMouseDown={(e) => onDragStart(e, d.id, d.dir)} />
                 ))}
+                {/* Drop preview: the exact half the dragged host will take. Shown
+                    only on the workspace being dropped into. */}
+                {i === cur && dropAt && (
+                  <div className="drop-preview" style={rectStyle(dropAt.rect)}>
+                    <span>{dropAt.dir === 'col' ? 'Stack here' : 'Split here'}</span>
+                  </div>
+                )}
               </div>
             )
           })}

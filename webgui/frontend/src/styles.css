@@ -157,6 +157,25 @@ a, .link { color: var(--accent2); }
 .stage-empty-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
 .stage-empty-sub { font-size: 13px; line-height: 1.5; }
 .stage-empty-sub b { color: var(--accent); font-weight: 600; }
+.stage-empty-btn { margin-top: 14px; background: var(--accent); color: #06210a; border: 0;
+  border-radius: var(--r-sm); padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.stage-empty-btn:hover { filter: brightness(1.08); }
+.stage-empty-hint { margin-top: 14px; font-size: 12px; color: var(--muted); line-height: 1.5; max-width: 42ch; }
+.stage-empty-hint b { color: var(--text); font-weight: 600; }
+
+/* Drop preview: the exact half a dragged host will take, drawn over the tile it
+   is about to split. Without it a drag has no feedback and the direction the
+   drop will choose is invisible until after it happens. */
+.drop-preview { position: absolute; z-index: 6; pointer-events: none;
+  border: 2px dashed var(--accent); border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  display: flex; align-items: center; justify-content: center; }
+/* --bg-2 does not exist in this theme, so the label was painting on a transparent
+   background — near-invisible dark-on-dark over the tinted preview. Use the accent
+   fill with its ink colour, which reads in both themes. */
+.drop-preview span { font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  color: var(--accent-ink, #06210a); background: var(--accent);
+  padding: 5px 12px; border-radius: var(--r-sm); box-shadow: 0 2px 10px rgba(0, 0, 0, .35); }
 .ws-layer { position: absolute; inset: 0; }
 .tile { position: absolute; padding: 3px; display: flex; }
 .tile > * { pointer-events: auto; }

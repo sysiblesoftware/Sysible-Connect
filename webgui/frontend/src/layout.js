@@ -8,12 +8,47 @@ export const leaf = (spec) => ({ id: nid(), t: 'leaf', spec })
 export const isLeaf = (n) => !!n && n.t === 'leaf'
 
 // Replace `leafId` with a split of [that leaf, newLeafNode] in direction dir.
-export function splitLeaf(node, leafId, dir, newLeafNode) {
+// `before` puts the NEW pane first (left of / above the existing one), which is what
+// a drop on a tile's left or top edge means — without it every new pane could only
+// ever land to the right or below, and half the drop targets would be lies.
+export function splitLeaf(node, leafId, dir, newLeafNode, before = false) {
   if (isLeaf(node)) {
     if (node.id !== leafId) return node
-    return { id: nid(), t: 'split', dir, ratio: 0.5, a: node, b: newLeafNode }
+    const [a, b] = before ? [newLeafNode, node] : [node, newLeafNode]
+    return { id: nid(), t: 'split', dir, ratio: 0.5, a, b }
   }
-  return { ...node, a: splitLeaf(node.a, leafId, dir, newLeafNode), b: splitLeaf(node.b, leafId, dir, newLeafNode) }
+  return {
+    ...node,
+    a: splitLeaf(node.a, leafId, dir, newLeafNode, before),
+    b: splitLeaf(node.b, leafId, dir, newLeafNode, before),
+  }
+}
+
+// Which tile a point (% of the stage) is over, and which EDGE of it is nearest —
+// the drop target model: dropping a host on a tile's top or bottom edge stacks it
+// vertically, left or right splits it horizontally. Returns null when the point is
+// over no tile (an empty workspace).
+export function dropTarget(node, x, y) {
+  const { tiles } = layout(node)
+  const t = tiles.find((r) => x >= r.rect.left && x <= r.rect.left + r.rect.w &&
+                              y >= r.rect.top && y <= r.rect.top + r.rect.h)
+  if (!t) return null
+  // Normalised position inside the tile, then the nearest of the four edges. No dead
+  // zone in the middle: every point resolves to a direction, so a drop can never be
+  // ambiguous or silently do nothing.
+  const u = (x - t.rect.left) / (t.rect.w || 1)
+  const v = (y - t.rect.top) / (t.rect.h || 1)
+  const d = [
+    { dir: 'row', before: true, dist: u },
+    { dir: 'row', before: false, dist: 1 - u },
+    { dir: 'col', before: true, dist: v },
+    { dir: 'col', before: false, dist: 1 - v },
+  ].sort((p, q) => p.dist - q.dist)[0]
+  // The half the new pane would occupy, for the drop preview.
+  const half = d.dir === 'row'
+    ? { left: t.rect.left + (d.before ? 0 : t.rect.w / 2), top: t.rect.top, w: t.rect.w / 2, h: t.rect.h }
+    : { left: t.rect.left, top: t.rect.top + (d.before ? 0 : t.rect.h / 2), w: t.rect.w, h: t.rect.h / 2 }
+  return { id: t.id, dir: d.dir, before: d.before, rect: half }
 }
 
 // Remove a leaf; promote its sibling. Returns the new tree, or null if it was the last.
