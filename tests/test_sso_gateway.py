@@ -16,7 +16,7 @@ _SECRET = "shhh-gateway-secret"
 # Origin matches the default terminal-WS allowlist (https://connect.slop.lan); it is
 # harmless on the HTTP requests and required on the WS upgrade.
 _HDRS = {"X-Sysible-User": "alice", "X-Sysible-Role": "operator",
-         "X-Sysible-Auth": _SECRET, "Origin": "https://connect.slop.lan"}
+         "X-Sysible-Auth": _SECRET, "Origin": "http://testserver"}
 
 
 @pytest.fixture
@@ -85,3 +85,57 @@ def test_websocket_rejects_wrong_secret(trust_on):
         with pytest.raises(Exception):
             with c.websocket_connect("/api/terminal/ws?kind=local", headers=bad) as ws:
                 ws.receive_json()
+
+
+# ---- SLOP is the ONLY way in --------------------------------------------------
+# Connect publishes its own port on the host, so anything it still accepts locally
+# is a second front door the gateway never sees. Under SSO that must not exist:
+# a Connect-local session would outlive signing out of SLOP, and a Connect-local
+# password would be an account SLOP Administration does not manage.
+def test_no_local_login_when_slop_owns_identity(client, trust_on):
+    r = client.post("/api/login", json={"username": "admin", "password": "test1234"})
+    assert r.status_code == 403
+    assert "Sysible Linux Operations Platform" in r.json()["detail"]
+
+
+def test_a_local_session_stops_working_once_sso_is_on(client, monkeypatch):
+    """The signing-out gap: a session minted before SSO was enabled (or by someone
+    hitting the published port directly) must not survive."""
+    r = client.post("/api/login", json={"username": "admin", "password": "test1234"})
+    assert r.status_code == 200                      # standalone: local login works
+    assert client.get("/api/hosts").status_code == 200
+
+    monkeypatch.setattr(app_module, "_TRUST_GATEWAY", True)
+    monkeypatch.setattr(app_module, "_SSO_SECRET", _SECRET)
+    # Same client, same cookie — now refused, because the gateway is the only
+    # identity source and this request carries no gateway proof.
+    assert client.get("/api/hosts").status_code == 401
+
+
+def test_a_local_cookie_cannot_open_a_terminal_under_sso(client, monkeypatch):
+    from starlette.websockets import WebSocketDisconnect
+    import pytest as _pytest
+
+    assert client.post("/api/login",
+                       json={"username": "admin", "password": "test1234"}).status_code == 200
+    monkeypatch.setattr(app_module, "_TRUST_GATEWAY", True)
+    monkeypatch.setattr(app_module, "_SSO_SECRET", _SECRET)
+    with _pytest.raises(WebSocketDisconnect) as ei:
+        with client.websocket_connect("/api/terminal/ws?kind=local",
+                                      headers={"Origin": "http://testserver"}) as ws:
+            ws.receive_json()
+    assert ei.value.code == 4401
+
+
+def test_the_gateway_identity_still_works(client, trust_on):
+    # The point is to remove the SECOND door, not the first one.
+    assert client.get("/api/hosts", headers=_HDRS).status_code == 200
+
+
+def test_standalone_connect_is_unchanged(client):
+    # With no gateway configured Connect keeps its own login — it is still a
+    # usable standalone app.
+    assert app_module.sso_only() is False
+    assert client.post("/api/login",
+                       json={"username": "admin", "password": "test1234"}).status_code == 200
+    assert client.get("/api/hosts").status_code == 200

@@ -21,7 +21,8 @@ import backend.controller as controller
 import backend.secret as secret
 
 _SECRET = "shhh-gateway-secret"
-_ORIGIN = "https://connect.slop.lan"
+# TestClient addresses the app as http://testserver, so that IS the same origin.
+_ORIGIN = "http://testserver"
 
 
 @pytest.fixture
@@ -64,12 +65,17 @@ def test_spa_path_traversal_is_contained(client, path):
     assert b'"salt"' not in body and b'"hash"' not in body   # auth.json content
 
 
-# ----------------------------------------------- HIGH: terminal WS Origin allowlist
-def test_ws_rejected_on_sibling_origin(auth_client):
+# ----------------------------------------------- HIGH: terminal WS Origin check
+# The check defaults to SAME-ORIGIN, computed per request. It used to default to a
+# fixed "https://connect.slop.lan" from the per-subdomain era; SLOP is now one
+# origin addressed by path on whatever IP/name the client used, so that default
+# matched nothing and EVERY terminal upgrade was closed with 4403 — Connect could
+# not open a single terminal behind the gateway.
+def test_ws_rejected_on_foreign_origin(auth_client):
     with pytest.raises(WebSocketDisconnect) as ei:
         with auth_client.websocket_connect(
                 "/api/terminal/ws?kind=local",
-                headers={"Origin": "https://evil.slop.lan"}) as ws:
+                headers={"Origin": "https://evil.example"}) as ws:
             ws.receive_json()
     assert ei.value.code == 4403
 
@@ -85,6 +91,40 @@ def test_ws_accepted_on_allowed_origin(auth_client):
     with auth_client.websocket_connect(
             "/api/terminal/ws?kind=local", headers={"Origin": _ORIGIN}) as ws:
         assert ws.receive_json()["t"] in ("o", "exit")
+
+
+def test_ws_same_origin_works_on_any_address(auth_client):
+    """The regression that broke terminals: SLOP answers on whatever IP or name
+    the client used, so the check must derive the expected origin from the
+    request, not from a baked-in hostname. A raw-IP deployment must just work."""
+    for host, origin in (("192.168.8.239", "https://192.168.8.239"),
+                         ("slop.example.com", "https://slop.example.com"),
+                         ("192.168.8.239:8443", "https://192.168.8.239:8443")):
+        with auth_client.websocket_connect(
+                "/api/terminal/ws?kind=local",
+                headers={"Origin": origin, "Host": host}) as ws:
+            assert ws.receive_json()["t"] in ("o", "exit")
+
+
+def test_ws_uses_the_forwarded_host_when_the_gateway_sets_one(auth_client):
+    with auth_client.websocket_connect(
+            "/api/terminal/ws?kind=local",
+            headers={"Origin": "https://slop.example.com",
+                     "X-Forwarded-Host": "slop.example.com",
+                     "Host": "connect-internal:8700"}) as ws:
+        assert ws.receive_json()["t"] in ("o", "exit")
+
+
+def test_ws_still_refuses_a_different_host_on_the_same_page(auth_client):
+    # Same-origin is computed against THIS request's host — an Origin naming some
+    # other host is still refused, which is the whole point of the check.
+    with pytest.raises(WebSocketDisconnect) as ei:
+        with auth_client.websocket_connect(
+                "/api/terminal/ws?kind=local",
+                headers={"Origin": "https://attacker.example",
+                         "Host": "192.168.8.239"}) as ws:
+            ws.receive_json()
+    assert ei.value.code == 4403
 
 
 def test_ws_origin_allowlist_is_configurable(auth_client, monkeypatch):

@@ -11,6 +11,7 @@ import hmac
 import os
 import threading
 import time
+from urllib.parse import urlsplit
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -127,12 +128,46 @@ _SSO_SECRET = os.getenv("SYSIBLE_SSO_SHARED_SECRET", "")
 # source, so this floor is only ever consulted when a gateway identity is present.
 _PRIVILEGED_ROLES = {"superuser", "operator"}
 
-# Origin allowlist for the terminal websocket (defeats cross-site WebSocket hijacking
-# from a sibling *.slop.lan origin). Comma-separated; defaults to the Connect
-# subdomain the SLOP gateway serves. Checked BEFORE ws.accept(); a missing or
-# mismatched Origin is rejected.
+# Origin check for the terminal websocket (defeats cross-site WebSocket hijacking:
+# a browser cannot forge Origin, so refusing a foreign one stops another site from
+# opening this PTY over the victim's ambient session).
+#
+# The default is SAME-ORIGIN, computed per request — NOT a fixed hostname. It used
+# to default to "https://connect.slop.lan", from the era when each app had its own
+# subdomain. SLOP is now ONE origin addressed by path and answers on whatever IP or
+# name the client used, so the browser sends e.g. "https://192.168.8.239"; that
+# never matched, every upgrade was closed with 4403, and Connect could not open a
+# single terminal behind the gateway. Nothing in SLOP set the variable either, so
+# the broken default was always the one in force.
+#
+# Set SYSIBLE_CONNECT_ALLOWED_ORIGINS (comma-separated, exact origins) only when
+# the browser's origin genuinely differs from the host this service is addressed
+# as — e.g. an outer proxy that rewrites Host. Empty = same-origin, which is what
+# every stock deployment wants.
 _ALLOWED_ORIGINS = {o.strip() for o in os.getenv(
-    "SYSIBLE_CONNECT_ALLOWED_ORIGINS", "https://connect.slop.lan").split(",") if o.strip()}
+    "SYSIBLE_CONNECT_ALLOWED_ORIGINS", "").split(",") if o.strip()}
+
+
+def _ws_origin_ok(headers) -> bool:
+    """True when the websocket's Origin is allowed. Fails closed on a missing
+    Origin — the real console always sends one."""
+    origin = headers.get("origin")
+    if not origin:
+        return False
+    if _ALLOWED_ORIGINS:                      # explicit override configured
+        return origin in _ALLOWED_ORIGINS
+    # Same-origin: compare the Origin's host with the host THIS request was
+    # addressed to. Caddy preserves the client's Host and sets X-Forwarded-Host,
+    # so this works by raw IP or any name with nothing to configure. Host-only
+    # (port/scheme excluded) matches the IdP's own same-origin gate, so the whole
+    # platform judges "same site" the same way.
+    self_host = (headers.get("x-forwarded-host") or headers.get("host") or "")
+    self_host = self_host.split(",")[0].strip().lower().rsplit(":", 1)[0].strip("[]")
+    try:
+        origin_host = (urlsplit(origin).hostname or "").lower()
+    except ValueError:
+        return False
+    return bool(self_host) and origin_host == self_host
 
 # FAIL CLOSED: trust mode on but no shared secret means we cannot prove a request
 # actually came through the gateway, so identity headers must NOT be honored. Warn
@@ -174,6 +209,18 @@ def gateway_role(headers) -> str | None:
 
 
 # --------------------------------------------------------------------- auth
+def sso_only() -> bool:
+    """True when SLOP is the identity authority for this instance.
+
+    In that mode Connect must have NO identity source of its own. Connect's port
+    is published on the host, so anything it still accepts locally is a second
+    way in that the gateway never sees — a local session would survive signing
+    out of SLOP, and a local password would be an account SLOP administration
+    does not manage. Both are exactly what single sign-on is supposed to remove.
+    """
+    return bool(_TRUST_GATEWAY and _SSO_SECRET)
+
+
 def current_user(request: Request) -> str:
     # SSO gateway trust takes precedence: if the request provably came through the
     # gateway, trust its asserted identity and skip the cookie path entirely.
@@ -182,6 +229,14 @@ def current_user(request: Request) -> str:
         # Surface the asserted role so require_operator can enforce the read-only floor.
         request.state.role = request.headers.get("x-sysible-role", "")
         return gw
+    if sso_only():
+        # No gateway identity and SLOP owns identity → this request did not come
+        # through the front door. Refuse rather than falling back to a local
+        # session: that fallback is what let a Connect-local login outlive a SLOP
+        # sign-out, and what let someone reach Connect directly on its published
+        # port with an account SLOP knows nothing about.
+        raise HTTPException(status_code=401,
+                            detail="Sign in at the Sysible Linux Operations Platform.")
     user = auth.session_user(request.cookies.get(COOKIE))
     if not user:
         raise HTTPException(status_code=401, detail="Not signed in.")
@@ -242,7 +297,9 @@ def login(request: Request, response: Response, body: dict = Body(...)):
     # admin credential (and can't lock a username out) bypassing the gateway.
     if _TRUST_GATEWAY and _SSO_SECRET:
         raise HTTPException(status_code=403,
-                            detail="Local login is disabled — sign in through the SLOP gateway.")
+                            detail="Connect has no separate login — sign in at the Sysible "
+                                   "Linux Operations Platform. Accounts are managed in SLOP "
+                                   "Administration.")
     user = str(body.get("username") or "").strip()
     pw = str(body.get("password") or "")
     key = _throttle_key(request, user)
@@ -466,14 +523,17 @@ async def terminal_ws(ws: WebSocket):
     # so an exact allowlist match (checked BEFORE accept) stops a sibling *.slop.lan
     # page from opening this PTY over the victim's ambient session. A missing Origin is
     # rejected too — the legitimate SPA always sends one.
-    if ws.headers.get("origin") not in _ALLOWED_ORIGINS:
+    if not _ws_origin_ok(ws.headers):
         await ws.close(code=4403)
         return
     # The websocket bypasses current_user, so gateway trust is applied here
     # separately. Caddy forwards the X-Sysible-* headers on the WS upgrade too, so
     # ws.headers carries them; fall back to the session cookie for standalone Connect.
     gw = gateway_identity(ws.headers)
-    if not (gw or auth.session_user(ws.cookies.get(COOKIE))):
+    # Same rule as current_user: under SSO the gateway is the ONLY identity source,
+    # so a leftover local cookie can't open a shell after a SLOP sign-out.
+    local = None if sso_only() else auth.session_user(ws.cookies.get(COOKIE))
+    if not (gw or local):
         await ws.close(code=4401)
         return
     # Role floor (SSO mode): a terminal is the shell primitive, so a read-only auditor —
@@ -489,7 +549,7 @@ async def terminal_ws(ws: WebSocket):
     kind = ws.query_params.get("kind", "local")
     # A shell was handed out: record who, and to which host. Typed input and session
     # output are NEVER recorded — only that the session was opened.
-    audit.log(gw or auth.session_user(ws.cookies.get(COOKIE)) or "", "terminal_open",
+    audit.log(gw or local or "", "terminal_open",
               ws.query_params.get("host", "") or kind, f"kind={kind}")
     try:
         cols = int(ws.query_params.get("cols", 80))
