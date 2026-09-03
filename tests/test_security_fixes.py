@@ -290,10 +290,15 @@ def test_auth_store_refuses_planted_symlink(tmp_path):
 def test_security_headers_present(client):
     # Every response carries the clickjacking + sniffing + referrer defenses.
     r = client.get("/api/ping")
-    assert r.headers.get("X-Frame-Options") == "DENY"
+    # SAMEORIGIN, not DENY: behind SLOP every app shares one origin and SLOP
+    # Administration hosts each app's settings UI in-page. A FOREIGN page still
+    # cannot frame the terminal, which is the risk this header exists for.
+    assert r.headers.get("X-Frame-Options") == "SAMEORIGIN"
     assert r.headers.get("X-Content-Type-Options") == "nosniff"
     assert r.headers.get("Referrer-Policy") == "no-referrer"
-    assert "frame-ancestors 'none'" in r.headers.get("Content-Security-Policy", "")
+    csp = r.headers.get("Content-Security-Policy", "")
+    assert "frame-ancestors 'self'" in csp
+    assert "frame-ancestors 'none'" not in csp
 
 
 def test_throttle_key_uses_trusted_last_xff_hop():

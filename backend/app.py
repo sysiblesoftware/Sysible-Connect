@@ -82,18 +82,22 @@ app.add_middleware(_BodyLimitASGI, max_bytes=_MAX_REQUEST_BYTES)
 
 # Defense-in-depth response headers. Connect serves an HTML SPA + a live terminal
 # UI, so clickjacking of the PTY/fleet controls is the real risk — hence
-# frame-ancestors 'none' + X-Frame-Options: DENY. Behind the SLOP gateway these are
-# also stamped at the edge; setting them here protects the standalone/direct-access
-# deploy too. A lone frame-ancestors CSP directive blocks framing WITHOUT restricting
-# the SPA's own resource/websocket loading, so it can't break the console (a strict
+# frame-ancestors + X-Frame-Options. They are 'self' / SAMEORIGIN rather than
+# 'none' / DENY: behind the SLOP gateway every app shares ONE origin, and SLOP
+# Administration hosts each app's own settings UI in-page instead of keeping a
+# second copy that drifts. 'self' still refuses every OTHER site, so a foreign
+# page cannot frame the terminal either way. Behind the gateway these are also
+# stamped at the edge; setting them here protects the standalone deploy too. A
+# lone frame-ancestors CSP directive blocks framing WITHOUT restricting the SPA's
+# own resource/websocket loading, so it can't break the console (a strict
 # default-src is deliberately not forced here — that needs a per-build CSP).
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
     resp = await call_next(request)
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     resp.headers.setdefault("Referrer-Policy", "no-referrer")
-    resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+    resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
     if _is_https(request):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
     return resp
