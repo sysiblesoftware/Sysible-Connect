@@ -21,7 +21,7 @@ from pathlib import Path
 
 from fastapi import File, Form, UploadFile
 
-from . import audit, auth, controller, files, fleet, hosts, terminals
+from . import audit, auth, controller, files, fleet, hosts, sudo_vault, terminals
 
 # Server-side trail for websocket refusals. A close before accept() is invisible
 # in the app's own audit log (that is written after accept), so without this a
@@ -402,6 +402,36 @@ def change_password(request: Request, body: dict = Body(...), user: str = Depend
 
 
 # -------------------------------------------------------------------- hosts
+# ------------------------------------------------------- sudo password vault
+# The console can SET or CLEAR the operator's sudo password, and ask whether one
+# is stored — never read it back. Sending it is a websocket signal (see the
+# terminal loop), so the secret goes from the vault straight into the PTY and is
+# never in a response body the page could read.
+@app.get("/api/sudo")
+def sudo_status(request: Request, user: str = Depends(current_user)) -> dict:
+    return sudo_vault.status(user)
+
+
+@app.post("/api/sudo")
+def sudo_set(request: Request, body: dict = Body(...),
+             user: str = Depends(require_operator)) -> dict:
+    try:
+        out = sudo_vault.set_password(user, str(body.get("password") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    # The VALUE is never logged — only that this operator stored one.
+    audit.log(user, "sudo_password_stored")
+    return out
+
+
+@app.delete("/api/sudo")
+def sudo_clear(request: Request, user: str = Depends(current_user)) -> dict:
+    out = sudo_vault.clear(user)
+    if out.get("cleared"):
+        audit.log(user, "sudo_password_cleared")
+    return out
+
+
 @app.get("/api/hosts")
 def list_hosts(user: str = Depends(current_user)):
     return {"hosts": hosts.list_hosts()}
@@ -619,7 +649,8 @@ async def terminal_ws(ws: WebSocket):
     kind = ws.query_params.get("kind", "local")
     # A shell was handed out: record who, and to which host. Typed input and session
     # output are NEVER recorded — only that the session was opened.
-    audit.log(gw or local or "", "terminal_open",
+    who = gw or local or ""
+    audit.log(who, "terminal_open",
               ws.query_params.get("host", "") or kind, f"kind={kind}")
     try:
         cols = int(ws.query_params.get("cols", 80))
@@ -677,6 +708,22 @@ async def terminal_ws(ws: WebSocket):
                 sess.write(str(msg.get("d", "")).encode())
             elif mt == "r":
                 sess.resize(int(msg.get("cols", 80)), int(msg.get("rows", 24)))
+            elif mt == "sudo":
+                # "Send sudo password". The browser sends only this signal; the
+                # password is read from the vault HERE and written straight into
+                # the PTY, so it never travels to or from the page. Keyed by the
+                # operator whose session this is, so one operator's password can
+                # never elevate another's shell.
+                pw = sudo_vault.get_password(who)
+                if not pw:
+                    await ws.send_json({"t": "error",
+                                        "d": "No sudo password stored (or it expired). "
+                                             "Set one from the Sudo password button."})
+                else:
+                    sess.write((pw + "\n").encode())
+                    # The value is never recorded — only that it was sent, and where.
+                    audit.log(who, "sudo_password_sent",
+                              (host or {}).get("name") or kind)
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:

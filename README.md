@@ -14,6 +14,12 @@ fleet actions across every host — on its own or wired to a Sysible Controller.
   Controller** (agents + SSH hosts), with online/offline status.
 - **Run-as** — connect to the Controller with a username & password and terminals
   run as that operator's account (their sudo), attributed in the Controller audit
+- **Sudo password vault** — for hosts that don't allow passwordless sudo. Store
+  your sudo password once (encrypted at rest, per operator, with a TTL) and press
+  **sudo pw** in a terminal to type it at a sudo prompt. The password is
+  write-only: the console can set or clear it and ask whether one is stored, but
+  nothing returns it — the send is a signal and the server writes it straight
+  into the PTY, so it never reaches the browser.
   log, instead of root.
 - **Fleet actions** — run a command across every host; restart agents; reboot /
   power off (guarded).

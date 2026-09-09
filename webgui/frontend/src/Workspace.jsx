@@ -28,6 +28,12 @@ export default function Workspace({ me, onLogout }) {
   const [fleet, setFleet] = useState(null)    // {label, loading} | {label, results}
   const [filesFor, setFilesFor] = useState(null)   // host name whose Files modal is open
   const [theme, setTheme] = useState(getTheme())
+  const [sudoOpen, setSudoOpen] = useState(false)
+  const [sudoSet, setSudoSet] = useState(false)   // whether a sudo password is stored
+  useEffect(() => {
+    // Status only. The API deliberately has no way to read the password back.
+    api('sudo').then((d) => setSudoSet(!!d.set)).catch(() => setSudoSet(false))
+  }, [])
   const stageRef = useRef(null)
   const dragRef = useRef(null)   // { spaceIdx, splitId, dir }
 
@@ -322,6 +328,9 @@ export default function Workspace({ me, onLogout }) {
               aria-label="Toggle theme" onClick={() => setTheme(toggleTheme())}>
               {theme === 'light' ? <IconMoon /> : <IconSun />}
             </button>
+            <button className="side-btn ghost" onClick={() => setSudoOpen(true)}
+              title="Store the sudo password this account uses on managed hosts">
+              {sudoSet ? 'Sudo pw ✓' : 'Sudo pw'}</button>
             <button className="side-btn ghost" onClick={logout}>Sign out</button>
           </div>
         </div>
@@ -404,6 +413,7 @@ export default function Workspace({ me, onLogout }) {
 
       {fleet && <FleetResults data={fleet} onClose={() => setFleet(null)} />}
       {filesFor && <FilesModal host={filesFor} onClose={() => setFilesFor(null)} />}
+      {sudoOpen && <SudoModal isSet={sudoSet} onSet={setSudoSet} onClose={() => setSudoOpen(false)} />}
     </div>
   )
 }
@@ -542,6 +552,73 @@ function AddHost({ onCancel, onSave }) {
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <button className="side-btn ghost" onClick={onCancel}>Cancel</button>
         <button className="side-btn" onClick={() => onSave(f)}>Add host</button>
+      </div>
+    </div>
+  )
+}
+
+// Store or clear the sudo password this account uses on managed hosts.
+//
+// The password is WRITE-ONLY from here: this dialog can set it or clear it, and
+// ask whether one is stored, but there is no API that returns it. Sending it into
+// a session is a signal over the terminal websocket, and the server writes the
+// password into the PTY itself — so it never reaches this page at all.
+function SudoModal({ isSet, onSet, onClose }) {
+  const [pw, setPw] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [msg, setMsg] = useState('')
+  const [expires, setExpires] = useState(null)
+
+  useEffect(() => {
+    api('sudo').then((d) => { onSet(!!d.set); setExpires(d.expires_at || null) }).catch(() => {})
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const save = async () => {
+    setErr(''); setMsg(''); setBusy(true)
+    try {
+      const d = await api('sudo', { method: 'POST', json: { password: pw } })
+      onSet(true); setExpires(d.expires_at || null); setPw('')
+      setMsg('Saved — encrypted on this server, and never sent back to the browser.')
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  const clear = async () => {
+    setErr(''); setMsg(''); setBusy(true)
+    try {
+      await api('sudo', { method: 'DELETE' })
+      onSet(false); setExpires(null); setMsg('Cleared.')
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-h"><b>Sudo password</b>
+          <button className="side-host-del" style={{ marginLeft: 'auto' }} onClick={onClose}>✕</button></div>
+        <div className="modal-body">
+          <p className="muted" style={{ marginTop: 0, fontSize: 12.5, lineHeight: 1.5 }}>
+            For hosts that don’t allow passwordless sudo. Stored encrypted on this
+            server and used only when you press <b>sudo pw</b> in a terminal, which
+            types it into that session at a sudo prompt. It is never sent back to
+            this page, and it expires on its own.
+          </p>
+          <div style={{ marginBottom: 8 }}>
+            {isSet
+              ? <span className="ok-text">✓ A sudo password is stored{expires
+                  ? ` until ${new Date(expires * 1000).toLocaleString()}` : ''}.</span>
+              : <span className="muted">No sudo password stored.</span>}
+          </div>
+          <input type="password" autoComplete="new-password" value={pw}
+            placeholder={isSet ? 'Enter a new one to replace it' : 'your sudo password'}
+            onChange={(e) => setPw(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && pw) save() }} />
+          {err && <div className="login-err">{err}</div>}
+          {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
+          <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+            <button className="side-btn" disabled={busy || !pw} onClick={save}>Save</button>
+            <button className="side-btn ghost" disabled={busy || !isSet} onClick={clear}>Clear</button>
+          </div>
+        </div>
       </div>
     </div>
   )

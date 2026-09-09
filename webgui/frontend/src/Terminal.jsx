@@ -24,6 +24,14 @@ const Terminal = forwardRef(function Terminal({ spec, onStatus }, ref) {
     const ws = wsRef.current
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'i', d }))
   }
+  // "Send sudo password" sends only a SIGNAL. The password lives in the server's
+  // vault and is written straight into the PTY there, so it is never in a frame
+  // this page could read, never in the DOM, and never in the scrollback we save.
+  const sendSudo = () => {
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'sudo' }))
+    termRef.current?.focus()
+  }
   const bumpFont = (delta) => setFontSize((s) => Math.min(28, Math.max(8, s + delta)))
   const find = (prev) => { const s = searchRef.current; if (s && findQ) prev ? s.findPrevious(findQ) : s.findNext(findQ) }
   const saveOutput = () => {
@@ -110,6 +118,9 @@ const Terminal = forwardRef(function Terminal({ spec, onStatus }, ref) {
       <div className="term-tools">
         <button className="tt-key" title="Send Ctrl-C (interrupt the running command)"
           onClick={() => { sendInput('\x03'); termRef.current?.focus() }}>Ctrl-C</button>
+        <button className="tt-key" onClick={sendSudo}
+          title="Type your stored sudo password into this session, at a sudo prompt. The password never leaves the server.">
+          sudo pw</button>
         <span className="tt-sep" />
         <button className="tt-key" title="Smaller font" onClick={() => bumpFont(-1)}>A−</button>
         <button className="tt-key" title="Larger font" onClick={() => bumpFont(1)}>A+</button>
