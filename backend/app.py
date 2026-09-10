@@ -10,6 +10,7 @@ import asyncio
 import hmac
 import logging
 import os
+import re
 import threading
 import time
 from urllib.parse import urlsplit
@@ -475,7 +476,13 @@ def files_download(name: str, path: str, user: str = Depends(require_operator)):
         data = files.download(name, path)
     except files.FileError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    fname = (path.rsplit("/", 1)[-1] or "download").replace('"', "")
+    # The filename is the tail of an operator-supplied remote path and goes into a
+    # response HEADER. Stripping only the quote left CR/LF in it: h11 refuses to
+    # serialize a header value containing them, so a file whose name held a newline
+    # turned the download into a 500 with nothing explaining it — and on any stack
+    # that did not refuse, it would be header injection. Keep it to characters that
+    # are unambiguously safe in a header, and fall back rather than emit nothing.
+    fname = re.sub(r"[^A-Za-z0-9._-]", "_", path.rsplit("/", 1)[-1])[:200] or "download"
     return Response(content=data, media_type="application/octet-stream",
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 

@@ -219,3 +219,32 @@ def test_sending_with_nothing_stored_explains_itself(monkeypatch):
         msg = ws.receive_json()
         assert msg["t"] == "error"
         assert "No sudo password stored" in msg["d"]
+
+
+# --- the download filename ---------------------------------------------------
+# It is the tail of an operator-supplied REMOTE path and it goes into a response
+# header. Stripping only the quote left CR/LF in it, and h11 refuses to serialize
+# a header value containing those — so a remote file whose name held a newline
+# turned the download into an unexplained 500, and on a stack that did not refuse
+# it would be header injection.
+def test_a_hostile_remote_filename_cannot_reshape_the_response_headers(auth_client,
+                                                                       monkeypatch):
+    import backend.app as A
+    monkeypatch.setattr(A.files, "download", lambda name, path: b"payload")
+    monkeypatch.setattr(A.hosts, "get", lambda name: {"name": name}, raising=False)
+    r = auth_client.get("/api/hosts/h1/files/download",
+                        params={"path": "/tmp/a\r\nX-Injected: 1"})
+    assert r.status_code == 200, r.text
+    cd = r.headers["content-disposition"]
+    # The text may survive as inert characters inside the quoted filename; what
+    # must not survive is anything that could END the header.
+    assert "\r" not in cd and "\n" not in cd
+    assert cd.count('"') == 2 and cd.startswith('attachment; filename="')
+    assert "x-injected" not in {k.lower() for k in r.headers}
+
+
+def test_an_ordinary_filename_survives(auth_client, monkeypatch):
+    import backend.app as A
+    monkeypatch.setattr(A.files, "download", lambda name, path: b"payload")
+    r = auth_client.get("/api/hosts/h1/files/download", params={"path": "/etc/nginx.conf"})
+    assert r.headers["content-disposition"] == 'attachment; filename="nginx.conf"'
