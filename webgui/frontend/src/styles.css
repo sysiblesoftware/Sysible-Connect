@@ -281,8 +281,23 @@ a, .link { color: var(--accent2); }
 .tile-x:hover { color: var(--red); background: var(--panel2); }
 
 /* ---------- host groups + ping status ---------- */
-.side-envgroup { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
-  color: var(--faint); margin: 8px 0 2px 4px; }
+/* The environment heading is a control, not a caption: it folds its group so a
+   large fleet can be drilled into instead of scrolled past. */
+.side-envgroup { display: flex; align-items: center; gap: 5px; width: 100%;
+  background: transparent; border: 0; padding: 2px 0 2px 4px; cursor: pointer;
+  font: inherit; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--faint); margin: 8px 0 2px; text-align: left; }
+.side-envgroup:hover { color: var(--text); }
+.side-envgroup .caret { flex: 0 0 auto; transition: transform .12s ease; transform: rotate(90deg); }
+.side-envgroup.closed .caret { transform: rotate(0deg); }
+.side-envgroup .envname { flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-envgroup .envcount { flex: 0 0 auto; font-weight: 600; }
+.side-filter { width: 100%; background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r-sm); color: var(--text); padding: 6px 9px; font: inherit;
+  font-size: 12px; margin: 2px 0; }
+.side-filter:focus { outline: none; border-color: var(--accent); }
+.side-filter::placeholder { color: var(--faint); }
 .side-runas { font-size: 11px; color: var(--faint); margin: 1px 0 2px 16px; cursor: default; }
 .side-runas b { color: var(--muted); font-weight: 600; }
 .side-host-open .dot.up { background: var(--green); }

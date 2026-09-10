@@ -6,6 +6,14 @@ import { IconSplitRight, IconSplitDown, IconPopout, IconClose, IconSave, IconSun
 import { getTheme, toggleTheme } from './theme.js'
 import { leaf, splitLeaf, closeLeaf, setRatio, firstLeafId, layout, dropTarget } from './layout.js'
 
+// Sidebar host list. A three-host fleet fits on screen; a three-hundred-host one
+// does not, and a flat list of it cannot be worked with — so environments fold,
+// the fold is remembered, a filter appears once scanning stops working, and a
+// large fleet arrives folded rather than as a wall of rows.
+const CLOSED_ENVS_KEY = 'sysible-connect-closed-envs'
+const FILTER_HOSTS_FROM = 8
+const AUTO_COLLAPSE_HOSTS = 25
+
 let _ws = 0
 const newWorkspace = (spec) => {
   const n = ++_ws                    // 1, 2, 3 … (pre-increment: the first is "Workspace 1")
@@ -19,6 +27,11 @@ export default function Workspace({ me, onLogout }) {
   const [spaces, setSpaces] = useState(() => [newWorkspace()])
   const [cur, setCur] = useState(0)
   const [hosts, setHosts] = useState([])
+  const [hostFilter, setHostFilter] = useState('')
+  const [closedEnvs, setClosedEnvs] = useState(() => {
+    try { const v = JSON.parse(localStorage.getItem(CLOSED_ENVS_KEY) || '[]'); return new Set(Array.isArray(v) ? v : []) }
+    catch { return new Set() }
+  })
   const [adding, setAdding] = useState(false)
   const [ctrl, setCtrl] = useState({ connected: false })
   const [ctrlForm, setCtrlForm] = useState(false)
@@ -38,6 +51,16 @@ export default function Workspace({ me, onLogout }) {
   const dragRef = useRef(null)   // { spaceIdx, splitId, dir }
 
   const loadHosts = () => api('hosts').then((d) => setHosts(d.hosts || [])).catch(() => {})
+  // First sight of a large fleet: start folded. Only when the operator has no
+  // stored preference — once they have folded anything, that choice wins.
+  const autoFolded = useRef(false)
+  useEffect(() => {
+    if (autoFolded.current || !hosts.length) return
+    autoFolded.current = true
+    try { if (localStorage.getItem(CLOSED_ENVS_KEY)) return } catch { return }
+    const envs = new Set(hosts.map((h) => h.environment || 'Unassigned'))
+    if (hosts.length > AUTO_COLLAPSE_HOSTS && envs.size > 1) setClosedEnvs(envs)
+  }, [hosts])
   const loadCtrl = () => api('controller').then(setCtrl).catch(() => {})
   useEffect(() => {
     loadHosts()
@@ -210,12 +233,26 @@ export default function Workspace({ me, onLogout }) {
   }
   const logout = async () => { try { await api('logout', { method: 'POST' }) } catch { /* */ } onLogout() }
 
-  // Group hosts by environment for the sidebar (Unassigned last).
+  // Group hosts by environment for the sidebar (Unassigned last), narrowed by
+  // the filter box. The environment is the unit an operator thinks in, so the
+  // heading is always drawn — a single-environment fleet used to render as a
+  // bare list with the environment nowhere on the page.
+  const hostQuery = hostFilter.trim().toLowerCase()
   const hostGroups = React.useMemo(() => {
     const m = {}
-    for (const h of hosts) (m[h.environment || 'Unassigned'] ||= []).push(h)
+    const hit = (h) => !hostQuery || [h.name, h.address, h.environment]
+      .some((v) => String(v || '').toLowerCase().includes(hostQuery))
+    for (const h of hosts) if (hit(h)) (m[h.environment || 'Unassigned'] ||= []).push(h)
     return Object.entries(m).sort((a, b) => (a[0] === 'Unassigned') - (b[0] === 'Unassigned') || a[0].localeCompare(b[0]))
-  }, [hosts])
+  }, [hosts, hostQuery])
+  // Folding is a per-browser view preference, not fleet data, and it has to
+  // survive a reload or the drill-down is useless on the fleet it exists for.
+  const toggleEnv = (env) => setClosedEnvs((prev) => {
+    const next = new Set(prev)
+    next.has(env) ? next.delete(env) : next.add(env)
+    try { localStorage.setItem(CLOSED_ENVS_KEY, JSON.stringify([...next])) } catch { /* */ }
+    return next
+  })
   const dotClass = (h) => {
     const p = ping[h.name]
     if (p) { if (p.reachable === true) return ' up'; if (p.reachable === false) return ' down' }
@@ -278,10 +315,29 @@ export default function Workspace({ me, onLogout }) {
           </span>
         </div>
         {hosts.length === 0 && <div className="side-empty">No hosts yet.</div>}
-        {hostGroups.map(([env, list]) => (
+        {hosts.length > FILTER_HOSTS_FROM && (
+          <input className="side-filter" type="search" value={hostFilter}
+            placeholder="Filter hosts or environments…"
+            onChange={(e) => setHostFilter(e.target.value)} />
+        )}
+        {hosts.length > 0 && hostGroups.length === 0 && (
+          <div className="side-empty">Nothing matches “{hostFilter}”.</div>
+        )}
+        {hostGroups.map(([env, list]) => {
+          // While filtering, groups follow the filter rather than the fold —
+          // withholding a match inside a folded environment is the one thing a
+          // filter must never do.
+          const open = !!hostQuery || !closedEnvs.has(env)
+          return (
           <div key={env}>
-            {hostGroups.length > 1 && <div className="side-envgroup">{env}</div>}
-            {list.map((h) => {
+            <button className={'side-envgroup' + (open ? '' : ' closed')}
+              aria-expanded={open} title={(open ? 'Collapse ' : 'Expand ') + env}
+              onClick={() => { if (!hostQuery) toggleEnv(env) }}>
+              <span className="caret">▸</span>
+              <span className="envname">{env}</span>
+              <span className="envcount">{list.length}</span>
+            </button>
+            {open && list.map((h) => {
               const viaCtrl = h.source === 'controller'
               const kind = viaCtrl ? 'controller' : 'ssh'
               const p = ping[h.name]
@@ -307,7 +363,8 @@ export default function Workspace({ me, onLogout }) {
               )
             })}
           </div>
-        ))}
+          )
+        })}
         {adding && <AddHost onCancel={() => setAdding(false)} onSave={addHost} />}
 
         {hosts.length > 0 && <>
