@@ -78,11 +78,20 @@ body::before {
 }
 .login-brand { font-size: 20px; margin-bottom: 6px; letter-spacing: .3px; }
 .login-brand b { color: var(--accent); }
-.login input, .add-host input, .add-host textarea {
+/* Every text field in the app, not just the ones on the forms that happened to
+   exist when this rule was written. A bare <input> in a modal inherited NONE of
+   this and fell back to the browser default: a small light box on a dark panel,
+   which is how the sudo-password modal ended up looking as though it had no
+   field to type into at all. */
+.login input, .add-host input, .add-host textarea,
+.modal-body input, .modal-body textarea, .modal-body select {
   background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-sm);
   color: var(--text); padding: 9px 11px; font: inherit; width: 100%;
 }
+.login input::placeholder, .add-host input::placeholder,
+.modal-body input::placeholder, .modal-body textarea::placeholder { color: var(--faint); }
 .login input:focus, .add-host input:focus, .add-host textarea:focus,
+.modal-body input:focus, .modal-body textarea:focus, .modal-body select:focus,
 .term-find input:focus { outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .login-err { color: var(--red); font-size: 13px; }
@@ -120,7 +129,13 @@ a, .link { color: var(--accent2); }
 }
 .side-host-open:hover, .side-btn.ghost:hover { background: var(--panel2); }
 .side-host-open .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: 0 0 auto; }
-.side-foot { margin-top: auto; display: flex; align-items: center; justify-content: space-between; padding-top: 10px; }
+/* Stacked, not side by side: the sidebar is 232px and three controls in a row
+   left each button ~70px, which broke "Sudo Password" and "Sign out" across two
+   lines mid-label. The identity + theme toggle share the top row; the actions get
+   the full width underneath. */
+.side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 10px; }
+.side-foot-who { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.side-foot-who .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .add-host {
   display: flex; flex-direction: column; gap: 6px; padding: 8px;
   background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; margin-top: 6px;
@@ -231,15 +246,21 @@ a, .link { color: var(--accent2); }
 /* ---------- per-terminal toolbar ---------- */
 .term-wrap { display: flex; flex-direction: column; height: 100%; }
 .term-tools { display: flex; align-items: center; gap: 3px; padding: 4px 6px;
-  background: var(--panel); border-bottom: 1px solid var(--line); }
-/* text keys (Ctrl-C, A−, A+, ↑, ↓) */
+  background: var(--panel); border-bottom: 1px solid var(--line);
+  /* A tile can be split down to a fraction of the window. Scroll the toolbar
+     rather than let flex crush the keys until their labels break mid-word. */
+  overflow-x: auto; scrollbar-width: none; }
+.term-tools::-webkit-scrollbar { display: none; }
+/* text keys (Ctrl-C, Sudo Password, A−, A+, ↑, ↓) */
 .term-tools .tt-key { background: var(--panel2); border: 1px solid var(--line);
   color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 11px;
-  font-weight: 500; line-height: 1; padding: 4px 8px; letter-spacing: .02em; }
+  font-weight: 500; line-height: 1; padding: 4px 8px; letter-spacing: .02em;
+  white-space: nowrap; flex: 0 0 auto; }
 /* icon buttons (find, save, close) — square, SVG centred */
 .term-tools .tt-icon { display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 24px; padding: 0; background: var(--panel2);
-  border: 1px solid var(--line); color: var(--muted); border-radius: 6px; cursor: pointer; }
+  border: 1px solid var(--line); color: var(--muted); border-radius: 6px; cursor: pointer;
+  flex: 0 0 auto; }
 .term-tools .tt-key:hover, .term-tools .tt-icon:hover, .term-tools .tt-icon.on {
   color: var(--text); border-color: var(--accent); }
 /* thin separator between key groups */
@@ -268,7 +289,8 @@ a, .link { color: var(--accent2); }
 .side-host-open .dot.down { background: var(--red); }
 
 /* ---------- theme toggle + footer ---------- */
-.side-foot-actions { display: flex; align-items: center; gap: 6px; }
+.side-foot-actions { display: flex; flex-direction: column; gap: 6px; }
+.side-foot-actions .side-btn { width: 100%; text-align: center; white-space: nowrap; }
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px;
   background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: var(--r-sm); cursor: pointer; }
 .icon-btn:hover { color: var(--text); border-color: var(--accent); }

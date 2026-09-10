@@ -120,7 +120,7 @@ const Terminal = forwardRef(function Terminal({ spec, onStatus }, ref) {
           onClick={() => { sendInput('\x03'); termRef.current?.focus() }}>Ctrl-C</button>
         <button className="tt-key" onClick={sendSudo}
           title="Type your stored sudo password into this session, at a sudo prompt. The password never leaves the server.">
-          sudo pw</button>
+          Sudo Password</button>
         <span className="tt-sep" />
         <button className="tt-key" title="Smaller font" onClick={() => bumpFont(-1)}>A−</button>
         <button className="tt-key" title="Larger font" onClick={() => bumpFont(1)}>A+</button>

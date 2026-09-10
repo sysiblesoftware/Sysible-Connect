@@ -322,15 +322,17 @@ export default function Workspace({ me, onLogout }) {
         </>}
 
         <div className="side-foot">
-          <span className="muted">{me.user}</span>
-          <div className="side-foot-actions">
+          <div className="side-foot-who">
+            <span className="muted" title={me.user}>{me.user}</span>
             <button className="icon-btn" title={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'}
               aria-label="Toggle theme" onClick={() => setTheme(toggleTheme())}>
               {theme === 'light' ? <IconMoon /> : <IconSun />}
             </button>
+          </div>
+          <div className="side-foot-actions">
             <button className="side-btn ghost" onClick={() => setSudoOpen(true)}
               title="Store the sudo password this account uses on managed hosts">
-              {sudoSet ? 'Sudo pw ✓' : 'Sudo pw'}</button>
+              {sudoSet ? 'Sudo Password ✓' : 'Sudo Password'}</button>
             <button className="side-btn ghost" onClick={logout}>Sign out</button>
           </div>
         </div>
@@ -597,10 +599,11 @@ function SudoModal({ isSet, onSet, onClose }) {
           <button className="side-host-del" style={{ marginLeft: 'auto' }} onClick={onClose}>✕</button></div>
         <div className="modal-body">
           <p className="muted" style={{ marginTop: 0, fontSize: 12.5, lineHeight: 1.5 }}>
-            For hosts that don’t allow passwordless sudo. Stored encrypted on this
-            server and used only when you press <b>sudo pw</b> in a terminal, which
-            types it into that session at a sudo prompt. It is never sent back to
-            this page, and it expires on its own.
+            For hosts that don’t allow passwordless sudo. Type it below and press
+            <b> Save</b> — that is all this does; nothing runs on any host. It is stored
+            encrypted on this server and used only when you press <b>Sudo Password</b>
+            in a terminal, which types it into that session at a sudo prompt. It is
+            never sent back to this page, and it expires on its own.
           </p>
           <div style={{ marginBottom: 8 }}>
             {isSet
