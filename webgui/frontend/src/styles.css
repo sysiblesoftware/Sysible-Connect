@@ -15,8 +15,7 @@
   --green: #4caf5a; --red: #e5534b;
   --term-bg: #0b0f17;      /* terminal surface — dark in both themes */
   --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.28);
-  --topo: rgba(120,200,150,0.6); --topo-opacity: 0.14;
-  --glow1: rgba(70,177,100,0.10); --glow2: rgba(45,138,118,0.07);
+  --topo: url("/brand/topo-dark.svg");
   --r-lg: 10px; --r-md: 8px; --r-sm: 6px;
 }
 /* Light palette — applied on an explicit choice, or by OS preference when the
@@ -29,8 +28,7 @@
   --green: #2f9e4a; --red: #d23a30;
   --term-bg: #0b0f17;
   --shadow: 0 1px 2px rgba(20,30,50,.08), 0 8px 24px rgba(20,30,50,.10);
-  --topo: rgba(60,120,90,0.5); --topo-opacity: 0.05;
-  --glow1: rgba(70,177,100,0.06); --glow2: rgba(45,138,118,0.05);
+  --topo: url("/brand/topo-light.svg");
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
@@ -40,8 +38,7 @@
     --accent: #2f8a37; --accent-ink: #ffffff; --accent2: #2f6fe0;
     --green: #2f9e4a; --red: #d23a30;
     --shadow: 0 1px 2px rgba(20,30,50,.08), 0 8px 24px rgba(20,30,50,.10);
-    --topo: rgba(60,120,90,0.5); --topo-opacity: 0.05;
-    --glow1: rgba(70,177,100,0.06); --glow2: rgba(45,138,118,0.05);
+    --topo: url("/brand/topo-light.svg");
   }
 }
 * { box-sizing: border-box; }
@@ -50,17 +47,25 @@ body {
   background: var(--bg); color: var(--text);
   font-family: var(--font); font-size: 14px; -webkit-font-smoothing: antialiased;
 }
-/* Sysible topographic ground — the contour overlay, recoloured and kept subtle so
-   it reads as texture, not decoration. Tuned right down from the earlier loud green. */
-body::before { content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
-  background-color: var(--topo);
-  -webkit-mask: url("/brand-topo-overlay.png") center / cover no-repeat;
-          mask: url("/brand-topo-overlay.png") center / cover no-repeat;
-  opacity: var(--topo-opacity); }
-body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+/* The platform ground: the same topographic field as the SLOP portal, the sign-in
+   page, Flashback and the Visualizer — over the two brand glows. It replaces a
+   green-only PNG recoloured through a CSS mask, which was a DIFFERENT field in a
+   different colour, so no two Sysible surfaces agreed on what the background was.
+
+   It was also broken behind SLOP: the mask was fetched from "/brand-topo-overlay.png",
+   an absolute root URL that Vite does not rewrite to the app's base, so under the
+   gateway it asked the PORTAL for a file only this app ships and got nothing. The
+   field now lives at /brand/, which the gateway serves for every app, and is
+   mirrored into this app's own public/brand/ so a standalone install still has it.
+
+   Generated once by the platform: portal/brand/make_topo.py in the SLOP repo. */
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(85% 60% at 12% -8%, var(--glow1), transparent 55%),
-    radial-gradient(80% 70% at 100% 112%, var(--glow2), transparent 55%); }
+    var(--topo) center / cover no-repeat,
+    radial-gradient(70% 55% at 15% -10%, rgba(67,160,71,0.12), transparent 60%),
+    radial-gradient(70% 60% at 100% 110%, rgba(85,128,238,0.09), transparent 55%);
+}
 .center { display: grid; place-items: center; height: 100%; }
 .muted { color: var(--muted); }
 
