@@ -80,3 +80,91 @@ def test_explicit_url_wins_over_derivation(monkeypatch):
     monkeypatch.setattr(controller, "_DERIVED_CONTROLLER_URL", None)
     controller.disconnect()
     assert controller.status(host="10.0.0.5")["base_url"] == "https://sysible-controller:9000"
+
+
+# ---------------------------------------------------------------- stale seed
+# SYSIBLE_CONNECT_CONTROLLER_URL is written once by SLOP's install.sh from a single
+# `ip route get` and persisted into Connect's .env so it survives every recreate. On a
+# real install the host's network changed, and that frozen address kept Connect dialling
+# a host nobody answers at — through every restart, by design.
+
+def _sso(monkeypatch, seed, derived=None):
+    monkeypatch.setattr(controller, "_TRUST_GATEWAY", True)
+    monkeypatch.setattr(controller, "_SSO_SECRET", "sso-shared-secret")
+    monkeypatch.setattr(controller, "_LOCAL_CONTROLLER_URL", seed)
+    monkeypatch.setattr(controller, "_DERIVED_CONTROLLER_URL", derived)
+    controller.disconnect()
+
+
+def test_the_observed_host_overrides_a_stale_ip_seed(monkeypatch):
+    """The box moved from .22 to .40. The operator opens the portal at the new
+    address, and that request is what moves Connect onto it."""
+    _sso(monkeypatch, "https://192.168.1.22:9000")
+    st = controller.status(host="192.168.1.40")
+    assert st["base_url"] == "https://192.168.1.40:9000", "Connect is still on the dead address"
+
+
+def test_a_configured_name_is_never_overridden(monkeypatch):
+    """A compose service name does not go stale with a DHCP lease — it keeps
+    resolving to wherever the Controller is. Only an IP literal rots."""
+    _sso(monkeypatch, "https://sysible-controller:9000")
+    assert controller.status(host="10.0.0.5")["base_url"] == "https://sysible-controller:9000"
+
+
+def test_an_ipv6_seed_is_overridden_too(monkeypatch):
+    _sso(monkeypatch, "https://[2001:db8::22]:9000")
+    assert controller.status(host="192.168.1.40")["base_url"] == "https://192.168.1.40:9000"
+
+
+def test_the_seed_is_used_until_a_browser_arrives(monkeypatch):
+    """Nothing observed yet — a fresh install's first moments. The seed is right
+    then, and must still be used."""
+    _sso(monkeypatch, "https://192.168.1.22:9000")
+    assert controller._preferred_url() == "https://192.168.1.22:9000"
+
+
+def test_the_observed_host_survives_a_restart(monkeypatch, tmp_path):
+    """The tokenless paths — terminal, sync — have no request to learn from. If the
+    observation died with the process they would fall back to the stale seed until
+    somebody happened to open the console."""
+    monkeypatch.setattr(controller, "_TRUST_GATEWAY", True)
+    monkeypatch.setattr(controller, "_SSO_SECRET", "sso-shared-secret")
+    monkeypatch.setattr(controller, "_LOCAL_CONTROLLER_URL", "https://192.168.1.22:9000")
+    monkeypatch.setattr(controller, "_HOST_FILE", tmp_path / "gateway_host")
+    monkeypatch.setattr(controller, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(controller, "_DERIVED_CONTROLLER_URL", None)
+
+    controller.note_gateway_host("192.168.1.40:443")
+    assert (tmp_path / "gateway_host").read_text() == "https://192.168.1.40:9000"
+
+    # ... the process restarts: nothing in memory, the file is all there is.
+    monkeypatch.setattr(controller, "_DERIVED_CONTROLLER_URL", None)
+    controller._load_noted_host()
+    assert controller._preferred_url() == "https://192.168.1.40:9000"
+
+
+def test_a_read_only_data_dir_does_not_break_the_request(monkeypatch, tmp_path):
+    monkeypatch.setattr(controller, "_TRUST_GATEWAY", True)
+    monkeypatch.setattr(controller, "_SSO_SECRET", "sso-shared-secret")
+    monkeypatch.setattr(controller, "_LOCAL_CONTROLLER_URL", "")
+    monkeypatch.setattr(controller, "_DERIVED_CONTROLLER_URL", None)
+    monkeypatch.setattr(controller, "_HOST_FILE", tmp_path / "nope" / "gateway_host")
+
+    def _boom(*a, **k):
+        raise OSError("read-only file system")
+    monkeypatch.setattr(controller.DATA_DIR.__class__, "mkdir", _boom)
+
+    controller.note_gateway_host("192.168.1.40")
+    assert controller._preferred_url() == "https://192.168.1.40:9000"
+
+
+def test_observing_is_off_outside_sso_mode(monkeypatch, tmp_path):
+    """Standalone Connect attaches with a machine API key to whatever the operator
+    saved. Nothing here may touch that."""
+    monkeypatch.setattr(controller, "_TRUST_GATEWAY", False)
+    monkeypatch.setattr(controller, "_SSO_SECRET", "")
+    monkeypatch.setattr(controller, "_DERIVED_CONTROLLER_URL", None)
+    monkeypatch.setattr(controller, "_HOST_FILE", tmp_path / "gateway_host")
+    controller.note_gateway_host("192.168.1.40")
+    assert controller._DERIVED_CONTROLLER_URL is None
+    assert not (tmp_path / "gateway_host").exists()

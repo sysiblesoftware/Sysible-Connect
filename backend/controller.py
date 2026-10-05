@@ -50,6 +50,12 @@ _SSO_SECRET = os.getenv("SYSIBLE_SSO_SHARED_SECRET", "")
 # SLOP orchestrator; use the Controller's service name / LAN address, not localhost
 # (the SSRF guard blocks loopback, and in the compose stack services address each other
 # by name anyway).
+# This is a SEED, not the truth. The SLOP installer writes it once, from a single
+# `ip route get` at install time, and persists it into Connect's .env precisely so it
+# survives every recreate — so when the host's network changed under a real install,
+# this kept pointing Connect at an address nobody answers at, through every restart.
+# It is used only until a browser tells us where this stack is actually reachable
+# (see note_gateway_host / _sso_cfg below), which is first-hand evidence and wins.
 _LOCAL_CONTROLLER_URL = os.getenv("SYSIBLE_CONNECT_CONTROLLER_URL", "").strip()
 # The Controller backend API port (published on the same host in the SLOP stack).
 _CONTROLLER_PORT = (os.getenv("SYSIBLE_CONNECT_CONTROLLER_PORT", "9000").strip() or "9000")
@@ -59,22 +65,98 @@ _CONTROLLER_PORT = (os.getenv("SYSIBLE_CONNECT_CONTROLLER_PORT", "9000").strip()
 # embedded in the Controller. Cached once a request tells us the host (status() runs on
 # page load), so the tokenless terminal/sync paths — which have no request — can use it.
 _DERIVED_CONTROLLER_URL = None
+# The last host a browser reached us on, kept on disk. Without this the observation
+# is lost on every restart, and the tokenless paths (terminal, sync) — which have no
+# request to learn from — would fall back to the install-time seed until somebody
+# happened to open the console. A restart is exactly when that matters least and
+# hurts most.
+_HOST_FILE = DATA_DIR / "gateway_host"
 
 
-def note_gateway_host(host: str) -> None:
-    """Record the host the browser reached Connect on so SSO auto-attach can target the
-    local Controller at https://<host>:<port> when no explicit SYSIBLE_CONNECT_CONTROLLER_URL
-    is set. No-op unless SSO trust is on and no explicit URL is configured."""
-    global _DERIVED_CONTROLLER_URL
-    if _LOCAL_CONTROLLER_URL or not (_TRUST_GATEWAY and _SSO_SECRET):
-        return
+def _host_to_url(host: str) -> str:
     h = (host or "").strip()
     if not h:
-        return
+        return ""
     # Strip a :port from a host:port form; leave an IPv6 literal ([..]) alone.
     if not h.startswith("[") and ":" in h:
         h = h.rsplit(":", 1)[0]
-    _DERIVED_CONTROLLER_URL = f"https://{h}:{_CONTROLLER_PORT}"
+    return f"https://{h}:{_CONTROLLER_PORT}" if h else ""
+
+
+def note_gateway_host(host: str) -> None:
+    """Record the host the browser reached Connect on, so SSO auto-attach targets the
+    local Controller at https://<host>:<port>.
+
+    This now runs even when SYSIBLE_CONNECT_CONTROLLER_URL is set, and what it learns
+    takes precedence over it (_sso_cfg). The env var is a value frozen at install time;
+    this is the address the stack is being reached at right now. When the host's IP
+    changes, the operator opens the portal at the new one, and that request is what
+    moves Connect onto it.
+    """
+    global _DERIVED_CONTROLLER_URL
+    if not (_TRUST_GATEWAY and _SSO_SECRET):
+        return
+    url = _host_to_url(host)
+    if not url or url == _DERIVED_CONTROLLER_URL:
+        return
+    _DERIVED_CONTROLLER_URL = url
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        _HOST_FILE.write_text(url, encoding="utf-8")
+    except OSError:
+        pass          # a read-only data dir must not break the request
+
+
+def _load_noted_host() -> None:
+    """Restore the last observed host at import, so a restart does not fall back to
+    the install-time seed before the first page load."""
+    global _DERIVED_CONTROLLER_URL
+    if _DERIVED_CONTROLLER_URL or not (_TRUST_GATEWAY and _SSO_SECRET):
+        return
+    try:
+        got = _HOST_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+    if got.startswith("https://"):
+        _DERIVED_CONTROLLER_URL = got
+
+
+_load_noted_host()
+
+
+def _is_ip_url(url: str) -> bool:
+    """Is this URL addressed by a bare IP literal?
+
+    That is the distinction that matters here. An IP written into .env by the
+    installer is a DHCP lease frozen in a file — it is exactly what goes stale when
+    the host's network changes. A NAME (a compose service, a DNS record) does not:
+    it keeps resolving to wherever the Controller moved, and in a shared-network
+    stack it is more stable than the host address a browser happens to use. So the
+    observed host overrides the first and never the second.
+    """
+    import ipaddress
+    from urllib.parse import urlsplit
+    try:
+        host = urlsplit(url).hostname or ""
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def _preferred_url() -> str:
+    """Where SSO auto-attach should dial the local Controller.
+
+    The observed gateway host wins over an IP seed, because it is first-hand
+    evidence of where this stack is reachable NOW: when the host's address changes,
+    the operator opens the portal at the new one and that request moves Connect.
+    A configured name is left alone (see _is_ip_url).
+    """
+    seed = _LOCAL_CONTROLLER_URL
+    derived = _DERIVED_CONTROLLER_URL or ""
+    if derived and (not seed or _is_ip_url(seed)):
+        return derived
+    return seed
 
 
 def _sso_cfg() -> dict | None:
@@ -84,7 +166,7 @@ def _sso_cfg() -> dict | None:
     the shared secret instead of a machine API key."""
     if not (_TRUST_GATEWAY and _SSO_SECRET):
         return None
-    url = _LOCAL_CONTROLLER_URL or (_DERIVED_CONTROLLER_URL or "")
+    url = _preferred_url()
     if not url:
         return None
     return {"base_url": _normalize(url), "sso": True, "tls_cert": ""}
