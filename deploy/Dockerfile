@@ -9,7 +9,7 @@
 #   open https://localhost:8700
 
 # ---- stage 1: build the React console -------------------------------------
-FROM node:22-slim AS web
+FROM node:25-slim AS web
 WORKDIR /web
 # URL prefix the console is served under: "/" standalone, "/connect/" behind the
 # SLOP gateway (which path-routes /connect/* to this app on one shared origin).
