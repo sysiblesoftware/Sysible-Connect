@@ -1,0 +1,34 @@
+# Every manifest here pins exactly — requirements.txt, package-lock.json, the
+# base image — which is right, and is also how a pin goes quietly stale. Nothing
+# was refreshing them, so a CVE in fastapi, uvicorn or a bundled front-end
+# package would sit in a pinned file indefinitely with nobody looking.
+#
+# Weekly, grouped per ecosystem. No github-actions block: this repo has no
+# workflows for one to update.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /webgui/frontend
+    schedule:
+      interval: weekly
+    groups:
+      frontend:
+        patterns: ["*"]
+
+  # The image Connect builds on, and the images its compose file pins.
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: weekly
+    groups:
+      images:
+        patterns: ["*"]
