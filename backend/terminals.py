@@ -54,20 +54,93 @@ def _tofu_policy():
     return _Tofu()
 
 
+# Can this process step out of its container and onto the host?
+#
+# "Local shell" used to mean Popen([shell, "-l"]) — a shell wherever THIS process
+# runs, which is inside the Connect container. An operator who opened it got a
+# minimal Debian image as the unprivileged `connect` user: no sudo, an empty
+# /opt, and none of the server they were trying to administer. Reported as "when
+# I open a local shell why does it not have sudo?", and installing sudo there
+# would have answered the error message rather than the question — root in a
+# throwaway container still cannot see the host.
+#
+# Entering PID 1's namespaces is what makes it the HOST's shell. It needs the
+# container to be started with pid: host and the right capabilities (see
+# deploy/docker-compose.yml); without them nsenter fails, and the fallback below
+# is the old container shell with a banner that SAYS it is one. Silently handing
+# back a container shell is what caused this report.
+def host_shell_available() -> tuple[bool, str]:
+    """(usable, why-not). Cheap enough to call per session."""
+    if os.environ.get("SYSIBLE_CONNECT_HOST_SHELL", "1") != "1":
+        return False, "host shell disabled by SYSIBLE_CONNECT_HOST_SHELL=0"
+    if not shutil.which("nsenter"):
+        return False, "nsenter is not installed in this image"
+    try:
+        # With pid: host, PID 1 is the host's init rather than this container's.
+        os.stat("/proc/1/ns/mnt")
+    except OSError as e:
+        return False, f"/proc/1/ns/mnt is not readable ({e.__class__.__name__})"
+    if os.geteuid() != 0:
+        return False, "this container does not run as root"
+    # Readable is not the same as enterable: without CAP_SYS_ADMIN setns fails at
+    # the moment of use, which would be a session that dies the instant it opens.
+    probe = subprocess.run(
+        ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--", "true"],
+        capture_output=True, timeout=10)
+    if probe.returncode != 0:
+        err = (probe.stderr or b"").decode(errors="replace").strip()
+        return False, f"nsenter cannot enter the host namespaces ({err or 'permission denied'})"
+    return True, ""
+
+
 class LocalSession:
-    """A login shell on the Connect host, wired to a PTY."""
+    """A login shell on the Sysible host, wired to a PTY.
+
+    Falls back to a shell inside this container when the host namespaces are not
+    reachable — and says so, rather than looking like the host.
+    """
 
     kind = "local"
 
     def __init__(self, cols: int = 80, rows: int = 24, cwd: str | None = None):
         shell = os.environ.get("SHELL") or shutil.which("bash") or "/bin/sh"
+        on_host, why = host_shell_available()
+        self.on_host = on_host
+        self.degraded_reason = "" if on_host else why
+
+        if on_host:
+            # -m -u -i -n -p: mount, UTS, IPC, network and PID namespaces. The
+            # host's own shell is used, not this image's: /bin/bash here may not
+            # exist over there, and a login shell must read the host's profile.
+            argv = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--",
+                    "/bin/sh", "-c",
+                    "exec \"$(command -v bash || command -v sh)\" -l"]
+            start_cwd = None          # the host's /, not a path from this image
+        else:
+            argv = [shell, "-l"]
+            start_cwd = cwd or os.path.expanduser("~")
+
         self.master, slave = pty.openpty()
         self._set_size(cols, rows)
         env = dict(os.environ, TERM="xterm-256color")
+        # SHELL points at this image's bash; on the host it may be wrong, and a
+        # login shell that re-execs $SHELL would land back in the wrong place.
+        env.pop("SHELL", None)
         self.proc = subprocess.Popen(
-            [shell, "-l"], stdin=slave, stdout=slave, stderr=slave,
-            preexec_fn=os.setsid, env=env, cwd=cwd or os.path.expanduser("~"), close_fds=True)
+            argv, stdin=slave, stdout=slave, stderr=slave,
+            preexec_fn=os.setsid, env=env, cwd=start_cwd, close_fds=True)
         os.close(slave)
+
+    def banner(self) -> bytes:
+        """What the operator is actually looking at. Written before the first
+        prompt, because the two shells are indistinguishable once you are in one
+        — that ambiguity is the whole bug."""
+        if self.on_host:
+            return b"\r\n\x1b[32m* Sysible host shell\x1b[0m\r\n"
+        return (b"\r\n\x1b[33m* Container shell, NOT the Sysible host.\x1b[0m\r\n"
+                b"  " + self.degraded_reason.encode(errors="replace") + b"\r\n"
+                b"  Nothing here is the server: no sudo, and /opt and /etc belong\r\n"
+                b"  to this container.\r\n")
 
     def _set_size(self, cols: int, rows: int):
         try:

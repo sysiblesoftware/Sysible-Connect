@@ -29,9 +29,15 @@ FROM python:3.12-slim
 # bash (entrypoint + the "Local shell" PTY), openssl (self-signed TLS cert),
 # openssh-client (host-key scanning / SFTP niceties alongside paramiko),
 # ca-certificates (verify Controller/HTTPS), curl (healthcheck).
+# util-linux provides nsenter, which is how "Local shell" becomes a shell on the
+# SYSIBLE HOST rather than inside this container (backend/terminals.py). It is
+# usually already present in a Debian base as an essential package — named here
+# so a slimmer base, or a base that drops it, fails at build time instead of
+# turning every local shell into a silent container shell.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash openssl openssh-client ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
+      bash openssl openssh-client ca-certificates curl util-linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && command -v nsenter >/dev/null
 
 WORKDIR /app
 COPY requirements.txt requirements.txt

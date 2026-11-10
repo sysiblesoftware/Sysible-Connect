@@ -41,10 +41,32 @@ services:
       # bridge gateway. Defaults to every interface so a standalone Connect is
       # unchanged.
       - "${SYSIBLE_CONNECT_BIND:-0.0.0.0}:8700:8700"
+    # HOST SHELL. "Local shell" used to mean a shell inside THIS container: a
+    # minimal Debian image as the unprivileged `connect` user, no sudo, an empty
+    # /opt, none of the server the operator was trying to administer. These three
+    # settings are what let it be the host's shell instead — backend/terminals.py
+    # enters PID 1's namespaces with nsenter, which needs PID 1 to BE the host's
+    # init (pid: host) and the capabilities to call setns.
+    #
+    # Understand what this grants before copying it: a superuser in the browser
+    # terminal gets root on the Sysible host. That is the point — it is what an
+    # operator means by "local shell" — and it is the same class of access the
+    # updater already holds through the Docker socket. Set
+    # SYSIBLE_CONNECT_HOST_SHELL=0 to refuse it; terminals.py then falls back to
+    # the container shell and SAYS so on the first line, rather than looking like
+    # the host.
+    pid: host
+    cap_add:
+      - SYS_ADMIN     # setns() into the host namespaces
+      - SYS_PTRACE    # read /proc/1/ns/*
+    security_opt:
+      - apparmor:unconfined   # the default profile blocks setns
     volumes:
       - connect-data:/data
     environment:
       SYSIBLE_CONNECT_DATA: /data
+      # "0" refuses the host shell and keeps terminals inside this container.
+      SYSIBLE_CONNECT_HOST_SHELL: "${SYSIBLE_CONNECT_HOST_SHELL:-1}"
       SYSIBLE_CONNECT_TLS: "1"                          # "0" to serve plain HTTP (behind a proxy)
       SYSIBLE_CONNECT_TLS_HOSTS: ${SYSIBLE_CONNECT_TLS_HOSTS:-}  # e.g. 192.168.8.249,connect.lan
       # SYSIBLE_CONNECT_PASSWORD: change-me            # uncomment to set the admin password

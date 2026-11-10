@@ -654,6 +654,28 @@ async def terminal_ws(ws: WebSocket):
             return
     await ws.accept()
     kind = ws.query_params.get("kind", "local")
+    # A HOST shell is root on the Sysible server, which is more than an operator
+    # should hold. Terminals in general are operator-or-superuser (above); this
+    # one is superuser only. Checked against what the session would ACTUALLY be,
+    # not the requested kind: when the host namespaces are unreachable a local
+    # terminal is just a container shell and needs no extra privilege.
+    if kind == "local":
+        from . import terminals as _t
+        _host_shell, _ = _t.host_shell_available()
+        # Read the role again rather than reusing the one above: that name is
+        # bound only inside `if gw:`, so on a standalone Connect it does not
+        # exist and this gate would raise NameError and kill EVERY local
+        # terminal — a security check that takes the feature down with it.
+        #
+        # Standalone Connect has one account, and whoever opened this websocket
+        # already authenticated as it; there is no lesser role to withhold a host
+        # shell from, so it is treated as superuser.
+        _role = (ws.headers.get("x-sysible-role") or "").strip().lower() if gw else "superuser"
+        if _host_shell and _role != "superuser":
+            await _ws_refuse(ws, 4403,
+                             "Refused: a host shell needs superuser.",
+                             log_detail=f"role {_role!r} asked for a host shell (user {gw})")
+            return
     # A shell was handed out: record who, and to which host. Typed input and session
     # output are NEVER recorded — only that the session was opened.
     who = gw or local or ""
