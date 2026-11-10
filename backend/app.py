@@ -46,7 +46,16 @@ async def _ws_refuse(ws, code: int, reason: str, log_detail: str = ""):
     await ws.close(code=code, reason=reason)
 
 COOKIE = "sysible_connect_session"
-_DIST = Path(__file__).resolve().parent.parent / "webgui" / "frontend" / "dist"
+# The built SPA. Overridable so the console can be served from a tree built
+# somewhere else -- a CI artifact, a read-only mount, or a tmp directory in a
+# test. Without the override the SPA routes below only exist when this repo
+# happens to have been built, which made the containment tests for those very
+# routes pass vacuously in a fresh clone: no dist tree, no catch-all, 404 for
+# everything, including for the traversal attempts they were asserting were
+# contained.
+_DIST = Path(os.environ.get("SYSIBLE_CONNECT_DIST")
+             or (Path(__file__).resolve().parent.parent
+                 / "webgui" / "frontend" / "dist"))
 
 app = FastAPI(title="Sysible Connect")
 auth.ensure_admin()

@@ -9,6 +9,7 @@
     IPv4-mapped forms; the peer re-check refuses a blocked connected address.
   * secret.key / auth.json refuse to follow a pre-planted symlink (O_NOFOLLOW).
 """
+from pathlib import Path
 import os
 
 import pytest
@@ -371,3 +372,52 @@ def test_audit_write_failure_never_breaks_the_action(auth_client, monkeypatch):
     r = auth_client.post("/api/hosts", json={"name": "h4", "address": "10.0.0.4",
                                              "user": "root", "port": 22})
     assert r.status_code == 200
+
+
+# --------------------------------------------------------------------------
+# The SPA catch-all, driven where the guard actually is.
+#
+# The parametrised traversal test above goes through the HTTP client, and the
+# ASGI layer NORMALISES "/../auth.json" to "/auth.json" before routing — so the
+# route never sees a ".." and the guard it is supposed to be exercising is never
+# reached. Proven by removing the guard entirely: those four tests stayed green.
+#
+# A security test that cannot fail is worse than no test, because it is counted.
+# These call the route function directly with the path a buggy proxy, a future
+# ASGI server, or a mount at a sub-path could hand it.
+# --------------------------------------------------------------------------
+import pytest as _pytest
+
+import backend.app as _app_mod
+
+
+@_pytest.mark.parametrize("full_path", [
+    "../auth.json",
+    "../../auth.json",
+    "../../../../../../etc/passwd",
+    "app/../../../../../../etc/passwd",
+    "assets/../../auth.json",
+])
+def test_the_spa_route_cannot_be_walked_out_of_its_own_tree(full_path):
+    spa = getattr(_app_mod, "spa", None)
+    assert spa is not None, (
+        "the SPA catch-all is not registered — the dist tree is missing, and "
+        "this test would pass by not running the code it is about. "
+        "tests/conftest.py seeds one via SYSIBLE_CONNECT_DIST.")
+    resp = spa(full_path)
+    served = Path(resp.path).resolve()
+    base = _app_mod._DIST.resolve()
+    assert served.is_relative_to(base), (
+        f"{full_path!r} served {served}, which is OUTSIDE the SPA tree {base}")
+    assert served.name == "index.html", (
+        f"{full_path!r} served {served.name}; an escape attempt must collapse "
+        f"to the SPA index, not find a file")
+
+
+def test_the_spa_route_still_serves_what_it_should():
+    """Containment that blocks everything is not containment, it is an outage."""
+    spa = getattr(_app_mod, "spa", None)
+    assert spa is not None
+    served = Path(spa("favicon.svg").path).resolve()
+    assert served.name == "favicon.svg"
+    assert served.is_relative_to(_app_mod._DIST.resolve())
