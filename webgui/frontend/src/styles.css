@@ -8,11 +8,11 @@
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --bg: #0d1117; --panel: #131923; --panel2: #1a212d; --line: #26303f; --line-strong: #33405a;
-  --text: #e6edf5; --muted: #93a1b5; --faint: #6f7d92;
-  --accent: #46a04a;       /* brand green — primary actions */
-  --accent-ink: #06210c;   /* text on a green fill */
+  --text: #e6edf5; --muted: #9aa7bd; --faint: #6f7d92;
+  --accent: #43a047;       /* brand green — primary actions (portal/brand/tokens.json) */
+  --accent-ink: #0d1117;   /* text on a coloured fill; white fails AA on all of ours */
   --accent2: #5b86f0;      /* brand blue — links, active */
-  --green: #4caf5a; --red: #e5534b;
+  --green: #43a047; --red: #e5534b;
   --term-bg: #0b0f17;      /* terminal surface — dark in both themes */
   --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.28);
   --topo: url("/brand/topo-dark.svg");
