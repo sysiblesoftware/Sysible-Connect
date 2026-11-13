@@ -24,7 +24,7 @@
   color-scheme: light;
   --bg: #eef1f6; --panel: #ffffff; --panel2: #f3f5f9; --line: #dbe1ea; --line-strong: #c4cddb;
   --text: #1b2431; --muted: #5b6675; --faint: #8794a4;
-  --accent: #2f8a37; --accent-ink: #ffffff; --accent2: #2f6fe0;
+  --accent: #2e8736; --accent-ink: #ffffff; --accent2: #2f6fe0;
   --green: #2f9e4a; --red: #d23a30;
   --term-bg: #0b0f17;
   --shadow: 0 1px 2px rgba(20,30,50,.08), 0 8px 24px rgba(20,30,50,.10);
@@ -35,7 +35,7 @@
     color-scheme: light;
     --bg: #eef1f6; --panel: #ffffff; --panel2: #f3f5f9; --line: #dbe1ea; --line-strong: #c4cddb;
     --text: #1b2431; --muted: #5b6675; --faint: #8794a4;
-    --accent: #2f8a37; --accent-ink: #ffffff; --accent2: #2f6fe0;
+    --accent: #2e8736; --accent-ink: #ffffff; --accent2: #2f6fe0;
     --green: #2f9e4a; --red: #d23a30;
     --shadow: 0 1px 2px rgba(20,30,50,.08), 0 8px 24px rgba(20,30,50,.10);
     --topo: url("/brand/topo-light.svg");
